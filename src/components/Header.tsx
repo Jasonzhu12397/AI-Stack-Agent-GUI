@@ -79,7 +79,7 @@ export const Header: React.FC<HeaderProps> = ({
                     ? 'bg-indigo-600 text-white font-bold shadow-sm'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
-                title="切换为中文"
+                title={language === 'zh' ? '当前语言: 中文' : 'Switch to Chinese'}
               >
                 <span>中</span>
               </button>

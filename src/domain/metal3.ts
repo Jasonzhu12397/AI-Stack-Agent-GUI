@@ -26,6 +26,9 @@ export type TargetClusterStatus =
   | 'CONFIGURING_GPU_ROCE'
   | 'PIVOTING'
   | 'HEALTHY_OPERATIONAL'
+  | 'SCALING_UP'
+  | 'SCALING_DOWN'
+  | 'UPGRADING_VERSION'
   | 'FAILED';
 
 export interface EphNodeComponent {
@@ -1045,6 +1048,214 @@ export class Metal3Engine {
       actions_taken: actionsTaken,
       log_event: logEvent,
     };
+  }
+
+  public scaleCluster(clusterId: string, targetScale: { worker_nodes: number; gpu_nodes: number }): TargetCluster {
+    const cluster = this.clusters.get(clusterId);
+    if (!cluster) {
+      throw new Error(`Target Cluster '${clusterId}' not found`);
+    }
+
+    const prevWorkers = cluster.scale.worker_nodes;
+    const prevGpu = cluster.scale.gpu_nodes;
+    const isScaleUp = targetScale.worker_nodes >= prevWorkers;
+
+    if (isScaleUp) {
+      cluster.status = 'SCALING_UP';
+      cluster.current_stage = `AI Agent Elastic Scale-Up: Provisioning +${targetScale.worker_nodes - prevWorkers} nodes into cluster pool`;
+
+      // Find available or unassigned nodes to join cluster
+      for (const host of this.hosts.values()) {
+        if (host.provisioning_status === 'Available' || host.provisioning_status === 'Preparing') {
+          host.power_status = 'ON';
+          host.provisioning_status = 'ActiveInCluster';
+          host.target_cluster_id = clusterId;
+          host.provisioning_progress_percent = 100;
+          if (host.assigned_role === 'worker-gpu') {
+            host.ip_addresses.target_ip = `10.200.0.${20 + parseInt(host.name.replace(/\D/g, '') || '8')}`;
+          }
+        }
+      }
+
+      this.addLog(
+        'agent',
+        'eph-agent',
+        `Autonomous AI Agent accepted Scale-Up request: Expanding workers from ${prevWorkers} to ${targetScale.worker_nodes} (GPU nodes: ${targetScale.gpu_nodes})`,
+        'success',
+        `[eph-agent:scale-up] Target cluster=${cluster.name} delta=+${targetScale.worker_nodes - prevWorkers} nodes`
+      );
+
+      this.addLog(
+        'k8s-install',
+        'k8s-kubeadm',
+        `Generated ephemeral TLS bootstrap join tokens; distributing cloud-init join payloads to new baremetal nodes`,
+        'info',
+        `[k8s-kubeadm:join] kubeadm join 10.200.0.100:6443 --token [AUTO_EXPIRING_TOKEN] --discovery-token-ca-cert-hash sha256:...`
+      );
+
+      this.addLog(
+        'k8s-install',
+        'cilium-cni',
+        `Cilium eBPF BGP mesh peer discovered new worker nodes; MTU 9000 & RoCEv2 route reflection established`,
+        'success',
+        `[cilium-cni:routing] New node endpoints attached to eBPF datapath`
+      );
+    } else {
+      cluster.status = 'SCALING_DOWN';
+      cluster.current_stage = `AI Agent Graceful Scale-Down: Cordoning & draining -${prevWorkers - targetScale.worker_nodes} nodes`;
+
+      this.addLog(
+        'agent',
+        'eph-agent',
+        `Autonomous AI Agent accepted Scale-Down request: Draining and decommissioning ${prevWorkers - targetScale.worker_nodes} nodes`,
+        'warn',
+        `[eph-agent:scale-down] Target cluster=${cluster.name} target_workers=${targetScale.worker_nodes}`
+      );
+
+      this.addLog(
+        'k8s-install',
+        'k8s-kubeadm',
+        `Executed kubectl cordon & drain across decommission targets; evicted pods rescheduled to healthy nodes`,
+        'info',
+        `[k8s-kubeadm:drain] Pod eviction completed; nodes cleanly deregistered from control plane`
+      );
+    }
+
+    cluster.scale.worker_nodes = targetScale.worker_nodes;
+    cluster.scale.gpu_nodes = targetScale.gpu_nodes;
+    cluster.scale.total_nodes = cluster.scale.control_plane_nodes + targetScale.worker_nodes;
+    cluster.updated_at = new Date().toISOString();
+
+    setTimeout(() => {
+      cluster.status = 'HEALTHY_OPERATIONAL';
+      cluster.current_stage = `Cluster Healthy & Operational at ${cluster.scale.total_nodes} nodes (${cluster.scale.gpu_nodes * 8}x H100 GPUs)`;
+    }, 2500);
+
+    this.agentTelemetry.autonomous_decisions_count += 1;
+    return cluster;
+  }
+
+  public scaleDownSingleNode(clusterId: string, hostName: string): { host: BareMetalHost; cluster: TargetCluster } {
+    const cluster = this.clusters.get(clusterId);
+    if (!cluster) {
+      throw new Error(`Target Cluster '${clusterId}' not found`);
+    }
+
+    const host = this.hosts.get(hostName);
+    if (!host) {
+      throw new Error(`BareMetalHost '${hostName}' not found`);
+    }
+
+    this.addLog(
+      'agent',
+      'eph-agent',
+      `Autonomous AI Agent initiating safe cordon & drain on node ${hostName} (${host.rack_location})`,
+      'warn',
+      `[eph-agent:node-drain] kubectl cordon ${hostName} && kubectl drain ${hostName} --delete-emptydir-data --ignore-daemonsets`,
+      hostName
+    );
+
+    this.addLog(
+      'k8s-install',
+      'k8s-kubeadm',
+      `Node ${hostName} cordoned and drained. 12 pods evacuated. Node object removed from etcd registry.`,
+      'info',
+      `[k8s-core:delete] kubectl delete node ${hostName} -> status 200 OK`,
+      hostName
+    );
+
+    this.addLog(
+      'ironic-redirect',
+      'ironic-conductor',
+      `Ironic executing clean-steps on ${hostName}: NVMe crypto erase, IPMI soft power-off`,
+      'info',
+      `[ironic-conductor:clean] Clean step wipe_device completed; node returned to available inventory`,
+      hostName
+    );
+
+    host.power_status = 'OFF';
+    host.provisioning_status = 'Available';
+    host.target_cluster_id = null;
+    host.provisioning_progress_percent = 0;
+    host.ip_addresses.target_ip = 'Unassigned (Pool Available)';
+    if (host.sensors) {
+      host.sensors.power_watts = 42;
+    }
+    host.serial_console_recent.unshift(
+      `[SOL ttyS0] Node safely drained from cluster. System powered down via Redfish.`
+    );
+
+    if (host.assigned_role === 'worker-gpu') {
+      cluster.scale.gpu_nodes = Math.max(0, cluster.scale.gpu_nodes - 1);
+    }
+    cluster.scale.worker_nodes = Math.max(0, cluster.scale.worker_nodes - 1);
+    cluster.scale.total_nodes = cluster.scale.control_plane_nodes + cluster.scale.worker_nodes;
+    cluster.updated_at = new Date().toISOString();
+
+    this.agentTelemetry.autonomous_decisions_count += 1;
+    return { host, cluster };
+  }
+
+  public upgradeClusterVersion(clusterId: string, targetVersion: string): TargetCluster {
+    const cluster = this.clusters.get(clusterId);
+    if (!cluster) {
+      throw new Error(`Target Cluster '${clusterId}' not found`);
+    }
+
+    const previousVersion = cluster.k8s_version;
+    cluster.status = 'UPGRADING_VERSION';
+    cluster.current_stage = `AI Agent Rolling Upgrade: In-place migration from ${previousVersion} to ${targetVersion}`;
+
+    this.addLog(
+      'agent',
+      'eph-agent',
+      `Autonomous AI Agent launched Rolling Version Upgrade: ${previousVersion} -> ${targetVersion}`,
+      'info',
+      `[eph-agent:upgrade] Pre-flight inspection: etcd quorum healthy, Cilium eBPF compatible, NVIDIA FabricManager ready`
+    );
+
+    this.addLog(
+      'k8s-install',
+      'k8s-kubeadm',
+      `Step 1/3: Master CP upgrade: kubeadm upgrade apply ${targetVersion} on bmh-cp-master-01`,
+      'info',
+      `[kubeadm:upgrade] Control-plane static pods (apiserver, etcd, controller-manager) upgraded to ${targetVersion}`
+    );
+
+    this.addLog(
+      'k8s-install',
+      'k8s-kubeadm',
+      `Step 2/3: Master CP upgrade: bmh-cp-master-02 and bmh-cp-master-03 upgraded; stacked etcd raft maintained`,
+      'success',
+      `[kubeadm:upgrade] HA Control Plane quorum 3/3 online at ${targetVersion}`
+    );
+
+    this.addLog(
+      'k8s-install',
+      'k8s-kubeadm',
+      `Step 3/3: Rolling worker upgrade: drain -> upgrade kubelet to ${targetVersion} -> uncordon across ${cluster.scale.worker_nodes} workers`,
+      'success',
+      `[kubeadm:worker-upgrade] All baremetal workers successfully upgraded to ${targetVersion}`
+    );
+
+    this.addLog(
+      'k8s-install',
+      'nvidia-operator',
+      `NVIDIA GPU Operator & FabricManager re-verified on Kubernetes ${targetVersion}; CUDA 12.4 healthy`,
+      'success',
+      `[nvidia-operator:ready] 480x H100 SXM5 GPUs operational`
+    );
+
+    cluster.k8s_version = targetVersion;
+    cluster.updated_at = new Date().toISOString();
+
+    setTimeout(() => {
+      cluster.status = 'HEALTHY_OPERATIONAL';
+      cluster.current_stage = `Target Cluster Successfully Upgraded to Kubernetes ${targetVersion} (Self-Hosting & Ready)`;
+    }, 2500);
+
+    this.agentTelemetry.autonomous_decisions_count += 1;
+    return cluster;
   }
 }
 

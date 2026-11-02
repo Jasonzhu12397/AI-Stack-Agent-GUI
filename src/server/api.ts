@@ -1157,6 +1157,105 @@ apiRouter.post('/metal3/clusters/:id/pivot', (req: Request, res: Response) => {
   }
 });
 
+apiRouter.post('/metal3/clusters/:id/scale', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { worker_nodes, gpu_nodes } = req.body;
+  const principal = (req as any).principal;
+
+  if (typeof worker_nodes !== 'number' || worker_nodes < 1) {
+    return res.status(400).json({ error: { code: 'INVALID_SCALE', message: 'worker_nodes must be a positive number' } });
+  }
+
+  try {
+    const updated = globalMetal3Engine.scaleCluster(id, {
+      worker_nodes,
+      gpu_nodes: typeof gpu_nodes === 'number' ? gpu_nodes : Math.min(worker_nodes, 60),
+    });
+
+    globalStore.recordAudit({
+      trace_id: `tr_cl_scale_${Date.now()}`,
+      tenant_id: principal.tenant_id,
+      project_id: principal.active_project_id,
+      actor_id: principal.actor_id,
+      actor_name: principal.actor_name,
+      actor_role: principal.role,
+      event_type: 'WORKFLOW_PUBLISHED',
+      target_resource: `TargetK8sCluster/${id}`,
+      summary: `AI Agent orchestrated cluster scale to ${updated.scale.worker_nodes} workers (${updated.scale.gpu_nodes} GPUs)`,
+      payload_redacted: { cluster_id: id, target_scale: updated.scale },
+      status: 'SUCCESS',
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(404).json({ error: { code: 'CLUSTER_NOT_FOUND', message: err.message } });
+  }
+});
+
+apiRouter.post('/metal3/clusters/:id/scale-down-node', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { host_name } = req.body;
+  const principal = (req as any).principal;
+
+  if (!host_name) {
+    return res.status(400).json({ error: { code: 'MISSING_HOST', message: 'host_name is required' } });
+  }
+
+  try {
+    const result = globalMetal3Engine.scaleDownSingleNode(id, host_name);
+
+    globalStore.recordAudit({
+      trace_id: `tr_cl_drain_${Date.now()}`,
+      tenant_id: principal.tenant_id,
+      project_id: principal.active_project_id,
+      actor_id: principal.actor_id,
+      actor_name: principal.actor_name,
+      actor_role: principal.role,
+      event_type: 'TOOL_INVOKED',
+      target_resource: `BareMetalHost/${host_name}`,
+      summary: `AI Agent executed safe cordon & drain on node ${host_name} from cluster ${id}`,
+      payload_redacted: { cluster_id: id, host_name },
+      status: 'SUCCESS',
+    });
+
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(404).json({ error: { code: 'NODE_OR_CLUSTER_NOT_FOUND', message: err.message } });
+  }
+});
+
+apiRouter.post('/metal3/clusters/:id/upgrade', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { target_k8s_version } = req.body;
+  const principal = (req as any).principal;
+
+  if (!target_k8s_version) {
+    return res.status(400).json({ error: { code: 'MISSING_VERSION', message: 'target_k8s_version is required' } });
+  }
+
+  try {
+    const updated = globalMetal3Engine.upgradeClusterVersion(id, target_k8s_version);
+
+    globalStore.recordAudit({
+      trace_id: `tr_cl_upg_${Date.now()}`,
+      tenant_id: principal.tenant_id,
+      project_id: principal.active_project_id,
+      actor_id: principal.actor_id,
+      actor_name: principal.actor_name,
+      actor_role: principal.role,
+      event_type: 'WORKFLOW_PUBLISHED',
+      target_resource: `TargetK8sCluster/${id}`,
+      summary: `AI Agent performed in-place rolling upgrade of cluster ${id} to Kubernetes ${target_k8s_version}`,
+      payload_redacted: { cluster_id: id, target_version: target_k8s_version },
+      status: 'SUCCESS',
+    });
+
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(404).json({ error: { code: 'CLUSTER_NOT_FOUND', message: err.message } });
+  }
+});
+
 apiRouter.post('/metal3/agent/command', (req: Request, res: Response) => {
   const { command } = req.body;
   if (!command || typeof command !== 'string') {

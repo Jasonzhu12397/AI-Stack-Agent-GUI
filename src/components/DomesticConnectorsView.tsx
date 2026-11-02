@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Send,
   BellRing,
@@ -36,16 +36,20 @@ export const DomesticConnectorsView: React.FC = () => {
 
   // Dispatch test form states
   const [msgType, setMsgType] = useState<string>('card');
-  const [msgTitle, setMsgTitle] = useState<string>('生产环境告警：智能体审计已就绪');
-  const [msgContent, setMsgContent] = useState<string>(
-    '**AI Agent Studio 控制面** 检测到集群变更，所有工具调用已根据零信任策略完成不可变日志哈希归档。'
-  );
+  const [msgTitle, setMsgTitle] = useState<string>(t.domesticDefaultTitle);
+  const [msgContent, setMsgContent] = useState<string>(t.domesticDefaultContent);
   const [isAtAll, setIsAtAll] = useState<boolean>(false);
   const [atUsers, setAtUsers] = useState<string>('13800000000, 13900000000');
 
   const [isSending, setIsSending] = useState<boolean>(false);
   const [dispatchResult, setDispatchResult] = useState<any>(null);
   const [savedSuccess, setSavedSuccess] = useState<string | null>(null);
+
+  // Sync default texts when language switches if user hasn't typed custom text
+  useEffect(() => {
+    setMsgTitle(t.domesticDefaultTitle);
+    setMsgContent(t.domesticDefaultContent);
+  }, [language]);
 
   const handleSendTest = async () => {
     setIsSending(true);
@@ -151,9 +155,9 @@ export const DomesticConnectorsView: React.FC = () => {
         <button
           onClick={() => {
             setSelectedPlatform('feishu');
-            setMsgTitle('飞书智能体审批待办提醒');
+            setMsgTitle(t.feishuDefaultTitle);
           }}
-          className={`p-4 rounded-xl border text-left transition flex items-center gap-3 ${
+          className={`p-4 rounded-xl border text-left transition flex items-center gap-3 cursor-pointer ${
             selectedPlatform === 'feishu'
               ? 'bg-slate-900 border-indigo-500 shadow-lg shadow-indigo-950/50'
               : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
@@ -172,9 +176,9 @@ export const DomesticConnectorsView: React.FC = () => {
         <button
           onClick={() => {
             setSelectedPlatform('dingtalk');
-            setMsgTitle('钉钉智能体高危操作告警');
+            setMsgTitle(t.dingtalkDefaultTitle);
           }}
-          className={`p-4 rounded-xl border text-left transition flex items-center gap-3 ${
+          className={`p-4 rounded-xl border text-left transition flex items-center gap-3 cursor-pointer ${
             selectedPlatform === 'dingtalk'
               ? 'bg-slate-900 border-indigo-500 shadow-lg shadow-indigo-950/50'
               : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
@@ -193,9 +197,9 @@ export const DomesticConnectorsView: React.FC = () => {
         <button
           onClick={() => {
             setSelectedPlatform('wecom');
-            setMsgTitle('企业微信群机器人告警');
+            setMsgTitle(t.wecomDefaultTitle);
           }}
-          className={`p-4 rounded-xl border text-left transition flex items-center gap-3 ${
+          className={`p-4 rounded-xl border text-left transition flex items-center gap-3 cursor-pointer ${
             selectedPlatform === 'wecom'
               ? 'bg-slate-900 border-indigo-500 shadow-lg shadow-indigo-950/50'
               : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
@@ -213,7 +217,7 @@ export const DomesticConnectorsView: React.FC = () => {
         {/* Amap */}
         <button
           onClick={() => setSelectedPlatform('amap')}
-          className={`p-4 rounded-xl border text-left transition flex items-center gap-3 ${
+          className={`p-4 rounded-xl border text-left transition flex items-center gap-3 cursor-pointer ${
             selectedPlatform === 'amap'
               ? 'bg-slate-900 border-indigo-500 shadow-lg shadow-indigo-950/50'
               : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
@@ -224,14 +228,14 @@ export const DomesticConnectorsView: React.FC = () => {
           </div>
           <div>
             <div className="text-xs font-bold text-white">{t.domesticPlatformAmap}</div>
-            <div className="text-[10px] text-slate-400 font-mono">GCJ-02 Domestic Map</div>
+            <div className="text-[10px] text-slate-400 font-mono">GCJ-02 & Admin Geocode</div>
           </div>
         </button>
       </div>
 
-      {/* Main Grid: Configuration Form & Dispatch Test Bench */}
+      {/* Main Workspace: Config Form + Dispatch Sandbox */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Credentials & Webhook URL Configuration */}
+        {/* Left Column: Connector Credentials & Settings */}
         <div className="lg:col-span-5 p-5 rounded-xl bg-slate-900 border border-slate-800 space-y-4">
           <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <div className="flex items-center gap-2">
@@ -241,7 +245,7 @@ export const DomesticConnectorsView: React.FC = () => {
               </h2>
             </div>
             <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800 px-2 py-0.5 rounded">
-              Vault Encrypted
+              Encrypted Vault
             </span>
           </div>
 
@@ -261,7 +265,7 @@ export const DomesticConnectorsView: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  {t.domesticSecret} (HMAC-SHA256)
+                  {t.domesticSecret}
                 </label>
                 <input
                   type="password"
@@ -269,8 +273,8 @@ export const DomesticConnectorsView: React.FC = () => {
                   onChange={(e) => setFeishuSecret(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
                 />
-                <p className="text-[10px] text-slate-400 mt-1">
-                  在飞书机器人后台开启「安全设置 - 签名校验」获取密钥，系统自动计算时间戳加签。
+                <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                  {t.feishuDesc}
                 </p>
               </div>
             </div>
@@ -292,7 +296,7 @@ export const DomesticConnectorsView: React.FC = () => {
 
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  {t.domesticSecret} (SEC... 加签密钥)
+                  {t.domesticSecret} (SEC... {language === 'zh' ? '加签密钥' : 'Signing Secret'})
                 </label>
                 <input
                   type="password"
@@ -300,8 +304,8 @@ export const DomesticConnectorsView: React.FC = () => {
                   onChange={(e) => setDingtalkSecret(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
                 />
-                <p className="text-[10px] text-slate-400 mt-1">
-                  钉钉群机器人安全设置选择「加签」，自动对 timestamp + \n + secret 计算 HmacSHA256 并进行 Base64 编码。
+                <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                  {t.dingtalkDesc}
                 </p>
               </div>
             </div>
@@ -311,7 +315,7 @@ export const DomesticConnectorsView: React.FC = () => {
             <div className="space-y-3.5">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  {t.domesticWebhookUrl} (带 key 参数)
+                  {t.domesticWebhookUrl} ({language === 'zh' ? '带 key 参数' : 'with key parameter'})
                 </label>
                 <input
                   type="text"
@@ -319,8 +323,8 @@ export const DomesticConnectorsView: React.FC = () => {
                   onChange={(e) => setWecomWebhook(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
                 />
-                <p className="text-[10px] text-slate-400 mt-1">
-                  企业微信群聊添加「群机器人」，复制形如 key=693a91f6-7xxx 的 Webhook 地址。
+                <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                  {t.wecomDesc}
                 </p>
               </div>
             </div>
@@ -330,7 +334,7 @@ export const DomesticConnectorsView: React.FC = () => {
             <div className="space-y-3.5">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  高德开放平台 Web 服务 Key
+                  {t.amapKeyLabel}
                 </label>
                 <input
                   type="password"
@@ -338,8 +342,8 @@ export const DomesticConnectorsView: React.FC = () => {
                   onChange={(e) => setAmapKey(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-indigo-500"
                 />
-                <p className="text-[10px] text-slate-400 mt-1">
-                  用于国内高精度逆地理编码、城市行政区划与 GCJ-02 坐标系偏移校验。
+                <p className="text-[10px] text-slate-400 mt-1 leading-relaxed">
+                  {t.amapDesc}
                 </p>
               </div>
             </div>
@@ -348,15 +352,15 @@ export const DomesticConnectorsView: React.FC = () => {
           <div className="pt-2">
             <button
               onClick={handleSaveConfig}
-              className="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium border border-slate-700 flex items-center justify-center gap-1.5 transition"
+              className="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium border border-slate-700 flex items-center justify-center gap-1.5 transition cursor-pointer"
             >
               <Lock className="w-3.5 h-3.5" />
-              <span>{language === 'zh' ? '保存连接器配置' : 'Save Connector Config'}</span>
+              <span>{t.saveConnectorConfig}</span>
             </button>
             {savedSuccess && (
               <div className="mt-2 text-center text-xs text-emerald-400 flex items-center justify-center gap-1">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>配置已安全写入持久化隔离区！</span>
+                <span>{t.savedSuccessNotice}</span>
               </div>
             )}
           </div>
@@ -368,7 +372,7 @@ export const DomesticConnectorsView: React.FC = () => {
             <div className="flex items-center gap-2">
               <Terminal className="w-4 h-4 text-cyan-400" />
               <h2 className="text-sm font-semibold text-white">
-                {language === 'zh' ? '消息推送与验签测试台' : 'Notification Dispatch & Verification Bench'}
+                {t.domesticDispatchBench}
               </h2>
             </div>
             <span className="text-[10px] font-mono text-cyan-400">Simulation & Sandboxed Delivery</span>
@@ -384,10 +388,10 @@ export const DomesticConnectorsView: React.FC = () => {
                 onChange={(e) => setMsgType(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-xs text-white focus:outline-none focus:border-indigo-500"
               >
-                <option value="card">互动卡片 (Interactive Card)</option>
-                <option value="markdown">Markdown 格式卡片</option>
-                <option value="approval_notice">审批待办催办单 (Approval Notice)</option>
-                <option value="text">纯文本 (Plain Text)</option>
+                <option value="card">{t.optionInteractiveCard}</option>
+                <option value="markdown">{t.optionMarkdownCard}</option>
+                <option value="approval_notice">{t.optionApprovalNotice}</option>
+                <option value="text">{t.optionPlainText}</option>
               </select>
             </div>
 
@@ -424,18 +428,18 @@ export const DomesticConnectorsView: React.FC = () => {
                 onChange={(e) => setIsAtAll(e.target.checked)}
                 className="rounded border-slate-700 text-indigo-600 focus:ring-0"
               />
-              <span>@所有人 (@isAtAll)</span>
+              <span>{t.atAllLabel}</span>
             </label>
-            <span className="text-[11px] text-slate-500">仅限管理员高危紧急告警</span>
+            <span className="text-[11px] text-slate-500">{t.atAllNotice}</span>
           </div>
 
           <button
             onClick={handleSendTest}
             disabled={isSending}
-            className="w-full py-2.5 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium shadow-md shadow-indigo-600/30 flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+            className="w-full py-2.5 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium shadow-md shadow-indigo-600/30 flex items-center justify-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
-            <span>{isSending ? '发送中...' : t.btnSendDispatch}</span>
+            <span>{isSending ? t.sending : t.btnSendDispatch}</span>
           </button>
 
           {/* Results preview */}

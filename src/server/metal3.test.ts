@@ -175,3 +175,52 @@ test('Metal3 API: provides agent live status, stream-filtered logs and baremetal
     server.close();
   }
 });
+
+test('Metal3 API: AI Agent orchestrates cluster scale up, scale down, and rolling version upgrade', async () => {
+  const app = createTestApp();
+  const server = app.listen(0);
+  const address = server.address() as any;
+  const port = address.port;
+
+  try {
+    const clusterId = 'cluster_ai_superpod_01';
+
+    // 1. Scale Up: Expand worker nodes
+    const scaleUpRes = await fetch(`http://127.0.0.1:${port}/api/v1/metal3/clusters/${clusterId}/scale`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worker_nodes: 72, gpu_nodes: 64 }),
+    });
+    assert.equal(scaleUpRes.status, 200);
+    const scaleUpBody = await scaleUpRes.json();
+    assert.equal(scaleUpBody.success, true);
+    assert.equal(scaleUpBody.data.scale.worker_nodes, 72);
+    assert.equal(scaleUpBody.data.scale.gpu_nodes, 64);
+    assert.equal(scaleUpBody.data.scale.total_nodes, 75);
+
+    // 2. Scale Down Single Node: Cordon & Drain
+    const drainRes = await fetch(`http://127.0.0.1:${port}/api/v1/metal3/clusters/${clusterId}/scale-down-node`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host_name: 'bmh-compute-worker-04' }),
+    });
+    assert.equal(drainRes.status, 200);
+    const drainBody = await drainRes.json();
+    assert.equal(drainBody.success, true);
+    assert.equal(drainBody.data.host.provisioning_status, 'Available');
+    assert.equal(drainBody.data.host.power_status, 'OFF');
+
+    // 3. Cluster Version Rolling Upgrade
+    const upgRes = await fetch(`http://127.0.0.1:${port}/api/v1/metal3/clusters/${clusterId}/upgrade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_k8s_version: 'v1.32.0' }),
+    });
+    assert.equal(upgRes.status, 200);
+    const upgBody = await upgRes.json();
+    assert.equal(upgBody.success, true);
+    assert.equal(upgBody.data.k8s_version, 'v1.32.0');
+  } finally {
+    server.close();
+  }
+});

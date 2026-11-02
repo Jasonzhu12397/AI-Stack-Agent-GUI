@@ -44,6 +44,10 @@ import {
   Flame,
   Gauge,
   Check,
+  Scale,
+  TrendingUp,
+  ArrowUpCircle,
+  ArrowDownCircle,
 } from 'lucide-react';
 import {
   BareMetalHost,
@@ -105,6 +109,20 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const [newClusterGpuNodes, setNewClusterGpuNodes] = useState<number>(32);
   const [deployingCluster, setDeployingCluster] = useState<boolean>(false);
 
+  // Elastic Scaling Modal
+  const [showScaleModal, setShowScaleModal] = useState<boolean>(false);
+  const [scaleTargetWorkers, setScaleTargetWorkers] = useState<number>(64);
+  const [scaleTargetGpuNodes, setScaleTargetGpuNodes] = useState<number>(60);
+  const [scalingCluster, setScalingCluster] = useState<boolean>(false);
+
+  // Rolling Version Upgrade Modal
+  const [showUpgradeModal, setShowUpgradeModal] = useState<boolean>(false);
+  const [upgradeTargetVersion, setUpgradeTargetVersion] = useState<string>('v1.32.0');
+  const [upgradingCluster, setUpgradingCluster] = useState<boolean>(false);
+
+  // Single Node Drain / Scale-down
+  const [drainingHostName, setDrainingHostName] = useState<string | null>(null);
+
   // Selected Host for Details / SOL Console Drawer
   const [selectedHost, setSelectedHost] = useState<BareMetalHost | null>(null);
 
@@ -128,7 +146,13 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
           if (updated) setSelectedHost(updated);
         }
       }
-      if (clRes?.data) setClusters(clRes.data);
+      if (clRes?.data) {
+        setClusters(clRes.data);
+        if (clRes.data[0]) {
+          setScaleTargetWorkers(clRes.data[0].scale.worker_nodes);
+          setScaleTargetGpuNodes(clRes.data[0].scale.gpu_nodes);
+        }
+      }
       if (logsRes?.data) setLogs(logsRes.data);
       if (agentRes?.data) setAgentTelemetry(agentRes.data);
     } catch (err) {
@@ -265,6 +289,90 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
       }
     } catch (err) {
       console.error('Pivot failed:', err);
+    }
+  };
+
+  // Elastic Scaling Handler (Scale Up / Scale Down)
+  const handleScaleCluster = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeCluster) return;
+
+    setScalingCluster(true);
+    try {
+      const res = await fetch(`/api/v1/metal3/clusters/${activeCluster.id}/scale`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          worker_nodes: Number(scaleTargetWorkers),
+          gpu_nodes: Number(scaleTargetGpuNodes),
+        }),
+      }).then(r => r.json());
+
+      if (res.success) {
+        setShowScaleModal(false);
+        fetchMetal3Data();
+      }
+    } catch (err) {
+      console.error('Scaling failed:', err);
+    } finally {
+      setScalingCluster(false);
+    }
+  };
+
+  // Rolling Version Upgrade Handler
+  const handleUpgradeCluster = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeCluster) return;
+
+    setUpgradingCluster(true);
+    try {
+      const res = await fetch(`/api/v1/metal3/clusters/${activeCluster.id}/upgrade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_k8s_version: upgradeTargetVersion,
+        }),
+      }).then(r => r.json());
+
+      if (res.success) {
+        setShowUpgradeModal(false);
+        fetchMetal3Data();
+      }
+    } catch (err) {
+      console.error('Upgrade failed:', err);
+    } finally {
+      setUpgradingCluster(false);
+    }
+  };
+
+  // Single Node Safe Drain & Decommission
+  const handleDrainNode = async (hostName: string) => {
+    if (!activeCluster) return;
+    if (
+      !confirm(
+        language === 'zh'
+          ? `确认由 AI Agent 安全逐出并缩容节点 ${hostName}？(将执行 kubectl cordon & drain，抹除 NVMe 磁盘并下电归还备用池)`
+          : `Confirm AI Agent safe cordon & drain on node ${hostName}? (Will cordon, drain pods, sanitize disk, and return to pool)`
+      )
+    ) {
+      return;
+    }
+
+    setDrainingHostName(hostName);
+    try {
+      const res = await fetch(`/api/v1/metal3/clusters/${activeCluster.id}/scale-down-node`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host_name: hostName }),
+      }).then(r => r.json());
+
+      if (res.success) {
+        fetchMetal3Data();
+      }
+    } catch (err) {
+      console.error('Drain node failed:', err);
+    } finally {
+      setDrainingHostName(null);
     }
   };
 
@@ -495,7 +603,15 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               <span className="text-xs text-cyan-400 truncate">{activeCluster?.name}</span>
             </div>
             <div className="text-[10px] text-slate-400 mt-1 truncate">
-              {activeCluster?.status === 'CONFIGURING_GPU_ROCE' ? 'RoCEv2 Fabric Init' : activeCluster?.status}
+              {activeCluster?.status === 'CONFIGURING_GPU_ROCE'
+                ? 'RoCEv2 Fabric Init'
+                : activeCluster?.status === 'SCALING_UP'
+                  ? 'AI Agent Elastic Scale-Up'
+                  : activeCluster?.status === 'SCALING_DOWN'
+                    ? 'AI Agent Graceful Scale-Down'
+                    : activeCluster?.status === 'UPGRADING_VERSION'
+                      ? 'AI Agent In-Place Rolling Upgrade'
+                      : activeCluster?.status}
             </div>
           </div>
         </div>
@@ -757,6 +873,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                 const isGpu = host.assigned_role === 'worker-gpu';
                 const isMaster = host.assigned_role === 'control-plane';
                 const isPowerOn = host.power_status === 'ON';
+                const isDraining = drainingHostName === host.name;
 
                 return (
                   <div
@@ -934,7 +1051,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                             className="px-2 py-1 rounded bg-slate-800 hover:bg-rose-950/80 hover:text-rose-300 text-slate-300 text-[11px] font-medium transition cursor-pointer border border-slate-700 hover:border-rose-700"
                             title="Power OFF via Redfish"
                           >
-                            关机
+                            {t.btnPowerOff}
                           </button>
                         ) : (
                           <button
@@ -942,7 +1059,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                             className="px-2 py-1 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 text-[11px] font-medium transition cursor-pointer border border-emerald-800"
                             title="Power ON via Redfish"
                           >
-                            开机
+                            {t.btnPowerOn}
                           </button>
                         )}
 
@@ -951,15 +1068,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                           className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition cursor-pointer border border-slate-700"
                           title="Warm Reboot"
                         >
-                          重启
-                        </button>
-
-                        <button
-                          onClick={() => handlePowerAction(host.name, 'pxe-boot')}
-                          className="px-2 py-1 rounded bg-slate-800 hover:bg-indigo-950 hover:text-indigo-300 text-slate-300 text-[11px] font-medium transition cursor-pointer border border-slate-700"
-                          title="Force PXE Boot"
-                        >
-                          PXE
+                          {t.btnReboot}
                         </button>
 
                         <button
@@ -967,8 +1076,21 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                           className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition cursor-pointer border border-slate-700"
                           title="Trigger Ironic Inspector"
                         >
-                          巡检
+                          {t.btnInspect}
                         </button>
+
+                        {/* Drain / Scale-down single node button if node is in cluster */}
+                        {host.provisioning_status === 'ActiveInCluster' && !isMaster && (
+                          <button
+                            onClick={() => handleDrainNode(host.name)}
+                            disabled={isDraining}
+                            className="px-2 py-1 rounded bg-amber-950/60 hover:bg-amber-900/80 text-amber-300 border border-amber-800/80 text-[11px] font-medium transition cursor-pointer flex items-center gap-1"
+                            title="AI Agent Safe Cordon & Drain (Scale-Down)"
+                          >
+                            {isDraining ? <RotateCw className="w-3 h-3 animate-spin" /> : <ArrowDownCircle className="w-3 h-3" />}
+                            <span>{t.btnDrain}</span>
+                          </button>
+                        )}
                       </div>
 
                       <button
@@ -976,7 +1098,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                         className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-700/60 text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer"
                       >
                         <Terminal className="w-3 h-3" />
-                        <span>{language === 'zh' ? '串口/传感器' : 'SOL & Sensors'}</span>
+                        <span>{language === 'zh' ? '串口/传感器' : 'SOL'}</span>
                       </button>
                     </div>
                   </div>
@@ -1007,6 +1129,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   <tbody className="divide-y divide-slate-800/80 font-mono">
                     {filteredDashboardHosts.map(host => {
                       const isPowerOn = host.power_status === 'ON';
+                      const isMaster = host.assigned_role === 'control-plane';
                       return (
                         <tr key={host.name} className="hover:bg-slate-800/40 transition">
                           <td className="py-3 px-4">
@@ -1051,7 +1174,16 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                           <td className="py-3 px-3 text-slate-400">
                             {host.sensors ? `${host.sensors.cpu_temp_c}°C / ${host.sensors.power_watts}W` : 'N/A'}
                           </td>
-                          <td className="py-3 px-4 text-right">
+                          <td className="py-3 px-4 text-right space-x-1">
+                            {host.provisioning_status === 'ActiveInCluster' && !isMaster && (
+                              <button
+                                onClick={() => handleDrainNode(host.name)}
+                                className="px-2 py-1 rounded bg-amber-950/80 hover:bg-amber-900 text-amber-300 text-[11px] font-sans transition cursor-pointer"
+                                title="Drain & Scale Down"
+                              >
+                                {language === 'zh' ? '安全缩容' : 'Drain'}
+                              </button>
+                            )}
                             <button
                               onClick={() => setSelectedHost(host)}
                               className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-sans transition cursor-pointer"
@@ -1143,10 +1275,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                 {language === 'zh' ? '智能体活动监视环:' : 'Active Reconcilers:'}
               </span>
               {(agentTelemetry?.active_reconciliations || [
-                'Watch BareMetalHost CRDs',
+                'Watch BareMetalHost CRDs (67 items)',
                 'Ironic Conductor Power Watchdog',
                 'Cilium eBPF BGP Peer Mesh Verification',
                 'NVIDIA FabricManager SXM5 Health Probes',
+                'K8s In-Place Rolling Upgrade & Elastic Autoscaler Daemon',
               ]).map((rec, i) => (
                 <span
                   key={i}
@@ -1480,10 +1613,10 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleDispatchCommand('巡检机房全部裸机 Redfish 带外硬件资产')}
+                    onClick={() => handleDispatchCommand(t.commandInspectPreset)}
                     className="px-2 py-0.5 rounded bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 border border-indigo-800 cursor-pointer font-sans"
                   >
-                    🤖 AI 自动巡检
+                    {t.aiAutoInspect}
                   </button>
                 </div>
               </div>
@@ -1514,7 +1647,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
       )}
 
       {/* ========================================================================= */}
-      {/* --- SUBTAB 3: TARGET CLUSTER PIPELINE --- */}
+      {/* --- SUBTAB 3: TARGET CLUSTER PIPELINE & ELASTIC SCALE / UPGRADE --- */}
       {/* ========================================================================= */}
       {activeSubTab === 'cluster' && (
         <div className="space-y-6">
@@ -1522,14 +1655,29 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-6 border-b border-slate-800">
                 <div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
                     <span className="text-lg font-bold text-white font-mono">{activeCluster.name}</span>
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-950 border border-indigo-700/60 text-indigo-300">
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-950 border border-indigo-700/60 text-indigo-300 font-mono">
                       Kubernetes {activeCluster.k8s_version}
                     </span>
                     <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-cyan-950 border border-cyan-700/60 text-cyan-300">
                       {activeCluster.cni}
                     </span>
+                    {activeCluster.status === 'SCALING_UP' && (
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-700 animate-pulse">
+                        SCALING UP (+{scaleTargetWorkers})
+                      </span>
+                    )}
+                    {activeCluster.status === 'SCALING_DOWN' && (
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-amber-950 text-amber-300 border border-amber-700 animate-pulse">
+                        SCALING DOWN
+                      </span>
+                    )}
+                    {activeCluster.status === 'UPGRADING_VERSION' && (
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-purple-950 text-purple-300 border border-purple-700 animate-pulse">
+                        UPGRADING TO {activeCluster.k8s_version}
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-slate-400 mt-1">
                     API Endpoint:{' '}
@@ -1538,10 +1686,29 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   </p>
                 </div>
 
-                <div className="flex items-center gap-3">
+                {/* Operations Bar: Elastic Scaling, Rolling Upgrade, CAPI Pivot */}
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    onClick={() => setShowScaleModal(true)}
+                    className="px-3.5 py-2 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-700/60 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                    title="Scale Up or Down baremetal nodes"
+                  >
+                    <Scale className="w-3.5 h-3.5" />
+                    <span>{t.btnScaleCluster}</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowUpgradeModal(true)}
+                    className="px-3.5 py-2 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-700/60 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                    title="In-place rolling upgrade of Kubernetes version"
+                  >
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    <span>{t.btnUpgradeCluster}</span>
+                  </button>
+
                   <button
                     onClick={() => handleTriggerPivot(activeCluster.id)}
-                    className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition cursor-pointer"
+                    className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition cursor-pointer"
                   >
                     <ArrowRight className="w-4 h-4" />
                     <span>{t.btnTriggerPivot}</span>
@@ -1610,9 +1777,9 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
           ) : (
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center">
               <Boxes className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-              <div className="text-sm font-semibold text-slate-300">暂无正在运行的目标集群流水线</div>
+              <div className="text-sm font-semibold text-slate-300">{t.noRunningPipeline}</div>
               <p className="text-xs text-slate-500 mt-1">
-                点击上方“编排部署新集群”按钮，由引导节点 Agent 执行自动部署。
+                {t.noRunningPipelineDesc}
               </p>
             </div>
           )}
@@ -1629,7 +1796,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               <div>
                 <h2 className="text-base font-bold text-white tracking-tight">{t.bmhFleetTitle}</h2>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  通过 Ironic Conductor 注册的裸金属主机 CRD，支持 Redfish 虚拟介质与 IPMI 双协议。
+                  {t.bmhFleetDesc}
                 </p>
               </div>
             </div>
@@ -1714,7 +1881,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
                 <div className="text-xs font-semibold text-slate-300 flex items-center gap-2 mb-2">
                   <Cpu className="w-4 h-4 text-indigo-400" />
-                  <span>硬件配置 (Specs)</span>
+                  <span>{t.hardwareSpecs}</span>
                 </div>
                 <div className="space-y-1.5 text-xs font-mono text-slate-400">
                   <div>CPU: {ephNode?.host_specs?.cpu}</div>
@@ -1727,7 +1894,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
                 <div className="text-xs font-semibold text-slate-300 flex items-center gap-2 mb-2">
                   <Network className="w-4 h-4 text-cyan-400" />
-                  <span>三平面网络隔离拓扑</span>
+                  <span>{t.networkIsolation}</span>
                 </div>
                 <div className="space-y-1.5 text-xs font-mono text-slate-400">
                   <div>PXE: {ephNode?.networks?.pxe_provisioning_cidr}</div>
@@ -1739,10 +1906,10 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
                 <div className="text-xs font-semibold text-slate-300 flex items-center gap-2 mb-2">
                   <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                  <span>AI Agent 自主权能</span>
+                  <span>{t.aiAgentCapabilities}</span>
                 </div>
                 <div className="text-xs text-slate-400 leading-relaxed">
-                  在 eph-node 单节点内常驻 Daemon，脱机具备带外 BMC 重启、PXE 纠错、Kubeadm 多主令牌分发能力。
+                  {t.aiAgentCapabilitiesDesc}
                 </div>
               </div>
             </div>
@@ -1750,7 +1917,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
             {/* Components Table */}
             <div className="mt-6">
               <div className="text-xs font-semibold text-slate-300 mb-3">
-                引导节点内托管的核心控制器清单 (Pod Services):
+                {t.coreControllersList}
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {ephNode?.components?.map((c, i) => (
@@ -1820,7 +1987,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   </h3>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono">
                     <div className="bg-slate-950 border border-slate-800 rounded-lg p-3">
-                      <span className="text-[10px] text-slate-500 block">CPU 温度</span>
+                      <span className="text-[10px] text-slate-500 block">{t.sensorCpuTemp}</span>
                       <span className="text-lg font-bold text-amber-400 flex items-center gap-1.5 mt-1">
                         <Flame className="w-4 h-4" />
                         {selectedHost.sensors.cpu_temp_c}°C
@@ -1828,7 +1995,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                     </div>
 
                     <div className="bg-slate-950 border border-slate-800 rounded-lg p-3">
-                      <span className="text-[10px] text-slate-500 block">风扇转速</span>
+                      <span className="text-[10px] text-slate-500 block">{t.sensorFanSpeed}</span>
                       <span className="text-lg font-bold text-cyan-400 flex items-center gap-1.5 mt-1">
                         <Activity className="w-4 h-4" />
                         {selectedHost.sensors.fan_speed_rpm.toLocaleString()} RPM
@@ -1836,7 +2003,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                     </div>
 
                     <div className="bg-slate-950 border border-slate-800 rounded-lg p-3">
-                      <span className="text-[10px] text-slate-500 block">PSU 功耗</span>
+                      <span className="text-[10px] text-slate-500 block">{t.sensorPsuPower}</span>
                       <span className="text-lg font-bold text-yellow-400 flex items-center gap-1.5 mt-1">
                         <Zap className="w-4 h-4" />
                         {selectedHost.sensors.power_watts} W
@@ -1844,7 +2011,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                     </div>
 
                     <div className="bg-slate-950 border border-slate-800 rounded-lg p-3">
-                      <span className="text-[10px] text-slate-500 block">整机健康</span>
+                      <span className="text-[10px] text-slate-500 block">{t.sensorSystemHealth}</span>
                       <span className="text-lg font-bold text-emerald-400 flex items-center gap-1.5 mt-1">
                         <CheckCircle2 className="w-4 h-4" />
                         {selectedHost.sensors.system_health}
@@ -1932,15 +2099,272 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                 >
                   Trigger Inspection
                 </button>
+                {selectedHost.provisioning_status === 'ActiveInCluster' && selectedHost.assigned_role !== 'control-plane' && (
+                  <button
+                    onClick={() => {
+                      const name = selectedHost.name;
+                      setSelectedHost(null);
+                      handleDrainNode(name);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-800 text-xs font-semibold cursor-pointer"
+                  >
+                    {t.btnDrainNode}
+                  </button>
+                )}
               </div>
 
               <button
                 onClick={() => setSelectedHost(null)}
                 className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs text-white font-semibold cursor-pointer"
               >
-                关闭
+                {t.btnClose}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* --- ELASTIC SCALING MODAL (SCALE UP / SCALE DOWN) --- */}
+      {/* ========================================================================= */}
+      {showScaleModal && activeCluster && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
+            <button
+              onClick={() => setShowScaleModal(false)}
+              className="absolute right-4 top-4 text-slate-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
+                <Scale className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white tracking-tight">{t.modalScaleTitle}</h3>
+                <p className="text-xs text-slate-400">
+                  {language === 'zh'
+                    ? '由引导节点 AI Agent 编排裸机 iPXE 镜像装机 (扩容) 或 Cordon & Drain (缩容)'
+                    : 'AI Agent orchestrates baremetal iPXE imaging (scale-up) or safe cordon & drain (scale-down)'}
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleScaleCluster} className="space-y-4 mt-5">
+              {/* Current cluster scale summary */}
+              <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono flex items-center justify-between">
+                <span className="text-slate-400">{language === 'zh' ? '当前运行规模:' : 'Current Scale:'}</span>
+                <span className="text-white font-bold">
+                  {activeCluster.scale.control_plane_nodes} Masters + {activeCluster.scale.worker_nodes} Workers ({activeCluster.scale.gpu_nodes} GPUs)
+                </span>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold text-slate-300">
+                    {language === 'zh' ? '目标 Worker 计算节点数' : 'Target Worker Nodes'}
+                  </label>
+                  <span className="text-xs font-mono font-bold text-indigo-400">{scaleTargetWorkers} Nodes</span>
+                </div>
+                <input
+                  type="range"
+                  min="4"
+                  max="128"
+                  value={scaleTargetWorkers}
+                  onChange={e => {
+                    const val = Number(e.target.value);
+                    setScaleTargetWorkers(val);
+                    if (val < scaleTargetGpuNodes) setScaleTargetGpuNodes(val);
+                  }}
+                  className="w-full accent-indigo-500 cursor-pointer"
+                />
+                <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-0.5">
+                  <span>Min: 4 Nodes</span>
+                  <span>Max: 128 Nodes</span>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold text-slate-300">
+                    {language === 'zh' ? '其中 NVIDIA H100 GPU 节点数' : 'Of which NVIDIA H100 Supernodes'}
+                  </label>
+                  <span className="text-xs font-mono font-bold text-emerald-400">
+                    {scaleTargetGpuNodes} Nodes ({scaleTargetGpuNodes * 8} GPUs)
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max={Math.min(scaleTargetWorkers, 64)}
+                  value={scaleTargetGpuNodes}
+                  onChange={e => setScaleTargetGpuNodes(Number(e.target.value))}
+                  className="w-full accent-emerald-500 cursor-pointer"
+                />
+              </div>
+
+              {/* Delta Preview */}
+              <div className="p-3 rounded-lg border bg-slate-950/70 border-slate-800 text-xs">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-slate-400">{language === 'zh' ? '扩缩容变动:' : 'Scale Delta:'}</span>
+                  {scaleTargetWorkers > activeCluster.scale.worker_nodes ? (
+                    <span className="font-mono font-bold text-cyan-400 flex items-center gap-1">
+                      <ArrowUpCircle className="w-3.5 h-3.5" />
+                      +{scaleTargetWorkers - activeCluster.scale.worker_nodes} Workers (Scale-Up)
+                    </span>
+                  ) : scaleTargetWorkers < activeCluster.scale.worker_nodes ? (
+                    <span className="font-mono font-bold text-amber-400 flex items-center gap-1">
+                      <ArrowDownCircle className="w-3.5 h-3.5" />
+                      -{activeCluster.scale.worker_nodes - scaleTargetWorkers} Workers (Scale-Down)
+                    </span>
+                  ) : (
+                    <span className="font-mono text-slate-400">No Scale Change</span>
+                  )}
+                </div>
+                <div className="text-[11px] text-slate-400 mt-2 space-y-1">
+                  <div className="font-semibold text-slate-300">
+                    {t.scaleFlowTitle}
+                  </div>
+                  {scaleTargetWorkers >= activeCluster.scale.worker_nodes ? (
+                    <>
+                      <div>{t.scaleUpStep1}</div>
+                      <div>{t.scaleUpStep2}</div>
+                      <div>{t.scaleUpStep3}</div>
+                    </>
+                  ) : (
+                    <>
+                      <div>{t.scaleDownStep1}</div>
+                      <div>{t.scaleDownStep2}</div>
+                      <div>{t.scaleDownStep3}</div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowScaleModal(false)}
+                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer"
+                >
+                  {t.btnCancel}
+                </button>
+                <button
+                  type="submit"
+                  disabled={scalingCluster}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-2 cursor-pointer shadow-lg shadow-indigo-600/30"
+                >
+                  {scalingCluster ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                  <span>{scalingCluster ? t.scalingUp : t.btnConfirmScale}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* --- IN-PLACE ROLLING UPGRADE MODAL --- */}
+      {/* ========================================================================= */}
+      {showUpgradeModal && activeCluster && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
+            <button
+              onClick={() => setShowUpgradeModal(false)}
+              className="absolute right-4 top-4 text-slate-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-9 h-9 rounded-lg bg-purple-600 flex items-center justify-center text-white">
+                <TrendingUp className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white tracking-tight">{t.modalUpgradeTitle}</h3>
+                <p className="text-xs text-slate-400">
+                  {language === 'zh'
+                    ? '由引导节点 AI Agent 编排无中断热升级，保障 stacked etcd 仲裁与 GPU 业务零掉线'
+                    : 'AI Agent orchestrates in-place rolling upgrade preserving etcd quorum & GPU workloads'}
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleUpgradeCluster} className="space-y-4 mt-5">
+              <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                <div className="bg-slate-950 border border-slate-800 rounded-lg p-3">
+                  <span className="text-[10px] text-slate-500 block mb-1">
+                    {language === 'zh' ? '当前运行版本' : 'Current Version'}
+                  </span>
+                  <span className="text-base font-bold text-slate-300">{activeCluster.k8s_version}</span>
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-lg p-3">
+                  <span className="text-[10px] text-slate-500 block mb-1">
+                    {language === 'zh' ? '目标升级版本' : 'Target Version'}
+                  </span>
+                  <select
+                    value={upgradeTargetVersion}
+                    onChange={e => setUpgradeTargetVersion(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-bold text-purple-300 focus:outline-none"
+                  >
+                    <option value="v1.32.0">v1.32.0 (Latest Stable)</option>
+                    <option value="v1.31.3">v1.31.3 (Patch Release)</option>
+                    <option value="v1.32.1-rc.1">v1.32.1-rc.1 (Next Gen)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Pre-flight Checks */}
+              <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs space-y-2">
+                <div className="font-semibold text-slate-300">
+                  {language === 'zh' ? 'AI Agent 自动化前置预检 (Pre-Flight Checks):' : 'Pre-Flight Health Checks:'}
+                </div>
+                <div className="space-y-1 text-[11px] text-slate-400">
+                  <div className="flex items-center gap-1.5 text-emerald-400">
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                    <span>Stacked etcd 3.5.x raft quorum: 3/3 Masters healthy (RTT &lt; 1ms)</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-emerald-400">
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                    <span>Cilium eBPF CNI v1.16 host-routing compatible with target API server</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-emerald-400">
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                    <span>NVIDIA FabricManager & CUDA 12.4 daemonset validated</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Rolling Sequence Plan */}
+              <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-400 space-y-1">
+                <div className="font-semibold text-slate-300">
+                  {t.upgradePlanTitle}
+                </div>
+                <div>{t.upgradeStep1}</div>
+                <div>{t.upgradeStep2}</div>
+                <div>{t.upgradeStep3}</div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowUpgradeModal(false)}
+                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer"
+                >
+                  {t.btnCancel}
+                </button>
+                <button
+                  type="submit"
+                  disabled={upgradingCluster}
+                  className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-2 cursor-pointer shadow-lg shadow-purple-600/30"
+                >
+                  {upgradingCluster ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                  <span>{upgradingCluster ? t.upgrading : t.btnConfirmUpgrade}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -1965,7 +2389,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               <div>
                 <h3 className="text-base font-bold text-white tracking-tight">{t.btnDeployCluster}</h3>
                 <p className="text-xs text-slate-400">
-                  由 eph-node 上的自主 AI 智能体编排 67+ 裸金属节点全自动流水线
+                  {t.modalDeployDesc}
                 </p>
               </div>
             </div>
@@ -2016,7 +2440,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">HA 控制面节点</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">{t.haControlPlane}</label>
                   <input
                     type="number"
                     min="1"
@@ -2025,11 +2449,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                     onChange={e => setNewClusterMasters(parseInt(e.target.value))}
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white font-mono"
                   />
-                  <span className="text-[10px] text-slate-500">etcd quorum (3 或 5)</span>
+                  <span className="text-[10px] text-slate-500">{t.etcdQuorumHint}</span>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Worker 计算节点</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">{t.workerComputeNodes}</label>
                   <input
                     type="number"
                     min="1"
@@ -2038,7 +2462,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                     onChange={e => setNewClusterWorkers(parseInt(e.target.value))}
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white font-mono"
                   />
-                  <span className="text-[10px] text-slate-500">规模可达 500+</span>
+                  <span className="text-[10px] text-slate-500">{t.scaleUpToHint}</span>
                 </div>
 
                 <div>
@@ -2056,11 +2480,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               </div>
 
               <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-400 space-y-1">
-                <div className="font-semibold text-slate-300">自动化交付流水线说明:</div>
-                <div>1. eph-node 上的 Ironic Conductor 自动驱动 BMC 完成 UEFI 引导与磁盘装机。</div>
-                <div>2. 引导节点 Agent 自动初始化 Kubeadm 3-Node HA Masters 并发放 Join Token。</div>
-                <div>3. 自动注入 Cilium RoCEv2 9000 巨型帧与 NVIDIA GPU Operator。</div>
-                <div>4. 完成后触发 CAPI Pivot，将 CRD 移交至目标集群成为自托管生产集群。</div>
+                <div className="font-semibold text-slate-300">{t.pipelineAutomationDesc}</div>
+                <div>{t.pipelineStep1}</div>
+                <div>{t.pipelineStep2}</div>
+                <div>{t.pipelineStep3}</div>
+                <div>{t.pipelineStep4}</div>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
@@ -2069,7 +2493,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   onClick={() => setShowDeployModal(false)}
                   className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer"
                 >
-                  取消
+                  {t.btnCancel}
                 </button>
                 <button
                   type="submit"
@@ -2077,7 +2501,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-2 cursor-pointer shadow-lg shadow-indigo-600/30"
                 >
                   {deployingCluster ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                  <span>确认并开始部署</span>
+                  <span>{deployingCluster ? (language === 'zh' ? '部署流水线执行中...' : 'Deploying Pipeline...') : t.btnConfirmDeploy}</span>
                 </button>
               </div>
             </form>
