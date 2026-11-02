@@ -32,6 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'approvals', label: t.tabGovernance },
     { id: 'org', label: t.tabOrgMembers },
     { id: 'tools', label: t.tabIntegrationHub },
+    { id: 'metal3', label: t.tabMetal3 },
     { id: 'audits', label: t.tabAuditTrail },
     { id: 'matrix', label: t.tabMatrix },
   ];

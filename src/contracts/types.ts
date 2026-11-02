@@ -253,7 +253,11 @@ export interface AuditEvent {
     | 'AGENT_PUBLISHED'
     | 'WORKFLOW_PUBLISHED'
     | 'CONFIG_UPDATED'
-    | 'EMERGENCY_TOOL_DISABLE';
+    | 'EMERGENCY_TOOL_DISABLE'
+    | 'CONNECTOR_STATUS_CHANGE'
+    | 'CONNECTOR_CONFIG_UPDATE'
+    | 'EXTERNAL_WEBHOOK_DISPATCH'
+    | 'TOOL_INVOKED';
   target_resource: string;
   summary: string;
   payload_redacted: Record<string, any>;

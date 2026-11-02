@@ -7,6 +7,7 @@ import { DAGValidator } from '../domain/dagValidator';
 import { DataSanitizer } from '../domain/sanitizer';
 import { IdentityManager } from '../domain/identity';
 import { PluginRegistry, WeatherEngine, DomesticAppDispatcher } from '../domain/plugins';
+import { globalMetal3Engine } from '../domain/metal3';
 import {
   Run,
   StepRun,
@@ -1012,3 +1013,182 @@ apiRouter.get('/metrics', (req: Request, res: Response) => {
     },
   });
 });
+
+// 11. Metal3 + Ironic BareMetal Kubernetes Deployment & Eph-Node AI Agent
+apiRouter.get('/metal3/status', (req: Request, res: Response) => {
+  const hosts = Array.from(globalMetal3Engine.hosts.values());
+  const clusters = Array.from(globalMetal3Engine.clusters.values());
+  res.json({
+    data: {
+      eph_node: {
+        id: globalMetal3Engine.ephNode.id,
+        name: globalMetal3Engine.ephNode.name,
+        status: globalMetal3Engine.ephNode.status,
+        k8s_version: globalMetal3Engine.ephNode.k8s_version,
+        ip: globalMetal3Engine.ephNode.ip_address,
+        agent: globalMetal3Engine.ephNode.agent_daemon,
+      },
+      stats: {
+        total_bmh_hosts: hosts.length,
+        active_in_cluster: hosts.filter(h => h.provisioning_status === 'ActiveInCluster').length,
+        provisioning: hosts.filter(h => h.provisioning_status === 'Provisioning' || h.provisioning_status === 'Preparing').length,
+        ready_available: hosts.filter(h => h.provisioning_status === 'Available').length,
+        inspecting: hosts.filter(h => h.provisioning_status === 'Inspecting').length,
+        power_on: hosts.filter(h => h.power_status === 'ON').length,
+        power_off: hosts.filter(h => h.power_status === 'OFF').length,
+        gpu_accelerators_total: 64,
+        total_clusters: clusters.length,
+      },
+    },
+  });
+});
+
+apiRouter.get('/metal3/eph-node', (req: Request, res: Response) => {
+  res.json({ data: globalMetal3Engine.ephNode });
+});
+
+apiRouter.get('/metal3/bmh', (req: Request, res: Response) => {
+  res.json({ data: Array.from(globalMetal3Engine.hosts.values()) });
+});
+
+apiRouter.post('/metal3/bmh/:name/power', (req: Request, res: Response) => {
+  const { name } = req.params;
+  const { action } = req.body;
+  const principal = (req as any).principal;
+
+  if (!['on', 'off', 'reboot', 'pxe-boot'].includes(action)) {
+    return res.status(400).json({ error: { code: 'INVALID_ACTION', message: 'Allowed power actions: on, off, reboot, pxe-boot' } });
+  }
+
+  try {
+    const updatedHost = globalMetal3Engine.setHostPower(name, action);
+
+    globalStore.recordAudit({
+      trace_id: `tr_bmh_pwr_${Date.now()}`,
+      tenant_id: principal.tenant_id,
+      project_id: principal.active_project_id,
+      actor_id: principal.actor_id,
+      actor_name: principal.actor_name,
+      actor_role: principal.role,
+      event_type: 'TOOL_INVOKED',
+      target_resource: `BareMetalHost/${name}`,
+      summary: `Executed BMC power command '${action}' on baremetal server ${name}`,
+      payload_redacted: { host: name, power_action: action, bmc_protocol: updatedHost.bmc_protocol },
+      status: 'SUCCESS',
+    });
+
+    res.json({ success: true, data: updatedHost });
+  } catch (err: any) {
+    res.status(404).json({ error: { code: 'HOST_NOT_FOUND', message: err.message } });
+  }
+});
+
+apiRouter.post('/metal3/bmh/:name/inspect', (req: Request, res: Response) => {
+  const { name } = req.params;
+  try {
+    const updated = globalMetal3Engine.triggerInspect(name);
+    res.json({ success: true, data: updated });
+  } catch (err: any) {
+    res.status(404).json({ error: { code: 'HOST_NOT_FOUND', message: err.message } });
+  }
+});
+
+apiRouter.get('/metal3/clusters', (req: Request, res: Response) => {
+  res.json({ data: Array.from(globalMetal3Engine.clusters.values()) });
+});
+
+apiRouter.post('/metal3/clusters', (req: Request, res: Response) => {
+  const { name, k8s_version, cni, gpu_operator, scale } = req.body;
+  const principal = (req as any).principal;
+
+  if (!name) {
+    return res.status(400).json({ error: { code: 'MISSING_NAME', message: 'Target cluster name is required' } });
+  }
+
+  const cluster = globalMetal3Engine.createTargetCluster({
+    name,
+    k8s_version: k8s_version || 'v1.31.2',
+    cni: cni || 'Cilium eBPF (RoCEv2 + BGP mesh)',
+    gpu_operator: gpu_operator || 'NVIDIA GPU Operator v24.6.0',
+    scale: scale || { control_plane_nodes: 3, worker_nodes: 32, gpu_nodes: 32 },
+  });
+
+  globalStore.recordAudit({
+    trace_id: `tr_cl_create_${Date.now()}`,
+    tenant_id: principal.tenant_id,
+    project_id: principal.active_project_id,
+    actor_id: principal.actor_id,
+    actor_name: principal.actor_name,
+    actor_role: principal.role,
+    event_type: 'WORKFLOW_PUBLISHED',
+    target_resource: `TargetK8sCluster/${cluster.id}`,
+    summary: `Dispatched Large-scale Baremetal K8s deployment '${cluster.name}' via Eph-Node AI Agent`,
+    payload_redacted: { cluster_name: cluster.name, scale: cluster.scale, cni: cluster.cni },
+    status: 'SUCCESS',
+  });
+
+  res.json({ success: true, data: cluster });
+});
+
+apiRouter.post('/metal3/clusters/:id/pivot', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const principal = (req as any).principal;
+
+  try {
+    const result = globalMetal3Engine.triggerPivot(id);
+
+    globalStore.recordAudit({
+      trace_id: `tr_cl_pivot_${Date.now()}`,
+      tenant_id: principal.tenant_id,
+      project_id: principal.active_project_id,
+      actor_id: principal.actor_id,
+      actor_name: principal.actor_name,
+      actor_role: principal.role,
+      event_type: 'APPROVAL_DECIDED',
+      target_resource: `ClusterAPIPivot/${id}`,
+      summary: `Triggered CAPI resource pivot from Eph-Node to target cluster ${id}`,
+      payload_redacted: { cluster_id: id },
+      status: 'SUCCESS',
+    });
+
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(404).json({ error: { code: 'CLUSTER_NOT_FOUND', message: err.message } });
+  }
+});
+
+apiRouter.post('/metal3/agent/command', (req: Request, res: Response) => {
+  const { command } = req.body;
+  if (!command || typeof command !== 'string') {
+    return res.status(400).json({ error: { code: 'INVALID_COMMAND', message: 'Command string is required' } });
+  }
+
+  const result = globalMetal3Engine.executeAgentCommand(command);
+  res.json({ success: true, data: result });
+});
+
+apiRouter.get('/metal3/agent/status', (req: Request, res: Response) => {
+  res.json({
+    data: {
+      ...globalMetal3Engine.agentTelemetry,
+      last_heartbeat: new Date().toISOString(),
+      eph_node: globalMetal3Engine.ephNode,
+    },
+  });
+});
+
+apiRouter.get('/metal3/bmh/:name', (req: Request, res: Response) => {
+  const { name } = req.params;
+  const host = globalMetal3Engine.hosts.get(name);
+  if (!host) {
+    return res.status(404).json({ error: { code: 'HOST_NOT_FOUND', message: `Host ${name} not found` } });
+  }
+  res.json({ data: host });
+});
+
+apiRouter.get('/metal3/logs', (req: Request, res: Response) => {
+  const { stream } = req.query;
+  const logs = globalMetal3Engine.getLogs(stream as any);
+  res.json({ data: logs });
+});
+

@@ -8,6 +8,7 @@ import { IntegrationHubView } from './components/IntegrationHubView';
 import { AuditView } from './components/AuditView';
 import { DocsAndMatrixView } from './components/DocsAndMatrixView';
 import { OrgMembersView } from './components/OrgMembersView';
+import { Metal3FleetView } from './components/Metal3FleetView';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import {
   Principal,
@@ -355,6 +356,8 @@ function AppContent() {
                 onRefresh={fetchAllData}
               />
             )}
+
+            {activeTab === 'metal3' && <Metal3FleetView currentPrincipal={currentPrincipal} />}
 
             {activeTab === 'audits' && <AuditView audits={audits} />}
 
