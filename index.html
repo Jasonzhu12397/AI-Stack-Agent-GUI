@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Agent Studio</title>
+    <meta name="description" content="Enterprise AI Agent & Workflow Studio with zero-trust execution, governance, tool sandboxing, and immutable releases." />
+    <meta property="og:title" content="AI Agent Studio" />
+    <meta property="og:description" content="Enterprise AI Agent & Workflow Studio with zero-trust execution, governance, tool sandboxing, and immutable releases." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script>
+      // Ignore HMR and WebSocket errors as HMR is disabled in this environment
+      window.addEventListener('error', function(e) {
+        if (e.message && (e.message.includes('WebSocket') || e.message.includes('@vite/client') || e.message.includes('createWebSocketModuleRunnerTransport'))) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        if (e.reason && (String(e.reason).includes('WebSocket') || String(e.reason).includes('@vite/client'))) {
+          e.stopImmediatePropagation();
+          e.preventDefault();
+        }
+      });
+    </script>
+  </head>
+  <body class="bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "AI Agent Studio",
+  "description": "Enterprise AI Agent & Workflow Studio with zero-trust execution, governance, tool sandboxing, and immutable releases.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
