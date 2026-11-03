@@ -15,7 +15,32 @@ export type ProvisioningStatus =
   | 'ReadyForCluster'
   | 'ActiveInCluster'
   | 'Deprovisioning'
-  | 'Error';
+  | 'Error'
+  | 'Degraded'
+  | 'Provisioning Failed';
+
+export interface HostAlert {
+  id: string;
+  host_name: string;
+  severity: 'CRITICAL' | 'WARNING';
+  status: 'ACTIVE' | 'RESOLVING' | 'RESOLVED';
+  rule: 'PROVISIONING_FAILED' | 'NODE_DEGRADED' | 'BMC_UNREACHABLE' | 'THERMAL_CRITICAL' | 'NVME_SMART_DEGRADED';
+  title: string;
+  title_en: string;
+  message: string;
+  message_en: string;
+  error_code: string;
+  diagnostics: {
+    phase: string;
+    bmc_ip?: string;
+    temperature_c?: number;
+    error_detail: string;
+    suggested_remediation: string;
+  };
+  detected_at: string;
+  resolved_at?: string;
+  dispatched_channels: string[];
+}
 
 export type TargetClusterStatus =
   | 'DRAFT'
@@ -187,6 +212,8 @@ export class Metal3Engine {
   public logs: Metal3LogEvent[] = [];
   public agentTelemetry: EphAgentTelemetry;
 
+  public alerts: Map<string, HostAlert> = new Map();
+
   constructor() {
     this.ephNode = this.initEphNode();
     this.agentTelemetry = {
@@ -205,11 +232,13 @@ export class Metal3Engine {
         'Ironic Conductor Power Watchdog',
         'Cilium eBPF BGP Peer Mesh Verification',
         'NVIDIA FabricManager SXM5 Health Probes',
+        'Proactive Fleet Degraded Watchdog Daemon',
       ],
     };
     this.seedHosts();
     this.seedClusters();
     this.seedLogs();
+    this.seedAlerts();
   }
 
   private initEphNode(): EphemeralBootstrapNode {
@@ -1256,6 +1285,191 @@ export class Metal3Engine {
 
     this.agentTelemetry.autonomous_decisions_count += 1;
     return cluster;
+  }
+
+  public seedAlerts() {
+    // Seed 1 initial proactive alert for demonstration: bmh-worker-gpu-08 in Provisioning Failed state
+    const failedHost = this.hosts.get('bmh-worker-gpu-08');
+    if (failedHost) {
+      failedHost.provisioning_status = 'Provisioning Failed';
+      failedHost.error_message = 'iPXE UEFI TFTP Timeout: Error PXE-E32 while fetching vmlinuz kernel artifact from eph-node:69';
+      failedHost.sensors.system_health = 'WARNING';
+    }
+
+    const alert: HostAlert = {
+      id: 'alt_bmh_failed_08',
+      host_name: 'bmh-worker-gpu-08',
+      severity: 'CRITICAL',
+      status: 'ACTIVE',
+      rule: 'PROVISIONING_FAILED',
+      title: '裸机节点装机中断: UEFI iPXE TFTP 传输超时',
+      title_en: 'BareMetal Provisioning Failed: UEFI iPXE TFTP Stream Timeout',
+      message: '节点 bmh-worker-gpu-08 在 Ironic OS 镜像流下发阶段超时 (PXE-E32)。网卡未能自 TFTP 服务拉取 vmlinuz 内核。',
+      message_en: 'Host bmh-worker-gpu-08 timed out during Ironic OS stream (PXE-E32). Boot NIC failed to load vmlinuz artifact.',
+      error_code: 'E_IRONIC_IPXE_TIMEOUT',
+      diagnostics: {
+        phase: 'Provisioning Failed (Ironic Conductor Step 4)',
+        bmc_ip: '192.168.100.28',
+        temperature_c: 44,
+        error_detail: 'iPXE dhcp negotiation succeeded on VLAN 101, but TFTP read ack packet lost after 30000ms.',
+        suggested_remediation: 'Power cycle via Redfish, reset boot device order to UEFI PXE, and force-retry Ironic inspection.',
+      },
+      detected_at: new Date(Date.now() - 360000).toISOString(),
+      dispatched_channels: [],
+    };
+
+    this.alerts.set(alert.id, alert);
+  }
+
+  public getAlerts(): HostAlert[] {
+    return Array.from(this.alerts.values()).sort(
+      (a, b) => new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime()
+    );
+  }
+
+  public simulateAlert(hostName?: string, rule?: 'PROVISIONING_FAILED' | 'NODE_DEGRADED'): HostAlert {
+    let target = hostName ? this.hosts.get(hostName) : undefined;
+    if (!target) {
+      const candidates = Array.from(this.hosts.values()).filter(h => h.assigned_role !== 'control-plane');
+      target = candidates[Math.floor(Math.random() * candidates.length)] || candidates[0];
+    }
+
+    const isDegraded = rule === 'NODE_DEGRADED' || Math.random() > 0.5;
+    const alertId = `alt_${target.name}_${Date.now().toString(36)}`;
+
+    if (isDegraded) {
+      target.provisioning_status = 'Degraded';
+      target.error_message = 'Hardware health degraded: NVMe wear-out endurance reached 91% and thermal throttling active.';
+      target.sensors.system_health = 'CRITICAL';
+      target.sensors.cpu_temp_c = 86;
+    } else {
+      target.provisioning_status = 'Provisioning Failed';
+      target.error_message = 'Ironic clean-steps failed: crypto disk erase command timed out on /dev/nvme0n1.';
+      target.sensors.system_health = 'WARNING';
+    }
+
+    const alert: HostAlert = {
+      id: alertId,
+      host_name: target.name,
+      severity: isDegraded ? 'CRITICAL' : 'WARNING',
+      status: 'ACTIVE',
+      rule: isDegraded ? 'NODE_DEGRADED' : 'PROVISIONING_FAILED',
+      title: isDegraded ? `节点 ${target.name} 运行态性能严重降级 (Degraded)` : `节点 ${target.name} 引导装机失败 (Provisioning Failed)`,
+      title_en: isDegraded ? `Node ${target.name} Performance Degraded (Thermal & SMART)` : `Node ${target.name} BareMetal Provisioning Failed`,
+      message: isDegraded
+        ? `检测到物理主机 ${target.name} CPU 核心温度过热 (86°C) 且 NVMe 介质健康度报警。`
+        : `节点 ${target.name} 经 Ironic 编排时发生异常，磁盘清理擦除超时。`,
+      message_en: isDegraded
+        ? `Node ${target.name} CPU temperature critical (86°C) and NVMe SMART endurance warning.`
+        : `Node ${target.name} failed during Ironic clean-steps: crypto erase timed out.`,
+      error_code: isDegraded ? 'E_HARDWARE_THERMAL_THROTTLE' : 'E_IRONIC_CLEAN_STEP_FAIL',
+      diagnostics: {
+        phase: target.provisioning_status,
+        bmc_ip: target.ip_addresses?.bmc_ip,
+        temperature_c: target.sensors?.cpu_temp_c,
+        error_detail: target.error_message || 'Unrecoverable exception in remote baremetal daemon',
+        suggested_remediation: 'Trigger AI Agent Autonomous Remediation to execute BMC warm reset and BMO reconciler purge.',
+      },
+      detected_at: new Date().toISOString(),
+      dispatched_channels: [],
+    };
+
+    this.alerts.set(alert.id, alert);
+
+    this.addLog(
+      'agent',
+      'eph-agent',
+      `[PROACTIVE_WATCHDOG] Node alert triggered for ${target.name} (${alert.rule})`,
+      'error',
+      `[alert-engine] Severity: ${alert.severity}. Diagnostic code: ${alert.error_code}`
+    );
+
+    return alert;
+  }
+
+  public autoRemediateAlert(alertId: string): { success: boolean; actions_taken: string[]; host: BareMetalHost } {
+    const alert = this.alerts.get(alertId);
+    if (!alert) {
+      throw new Error(`Alert '${alertId}' not found`);
+    }
+
+    const host = this.hosts.get(alert.host_name);
+    if (!host) {
+      throw new Error(`Host '${alert.host_name}' not found`);
+    }
+
+    alert.status = 'RESOLVING';
+
+    const actions = [
+      `1. Dispatched Redfish Chassis.Reset (ForceRestart) to BMC ${host.bmc_address}`,
+      `2. eph-node AI Agent cleared stuck Ironic conductor clean-step locks`,
+      `3. Re-applied BareMetalHost CRD metadata & re-queued iPXE provisioning`,
+      `4. BMC fan RPM set to High-Efficiency mode; CPU temp dropped to 39°C`,
+      `5. Node marked Available / Ready in pool`,
+    ];
+
+    host.provisioning_status = 'Available';
+    host.error_message = undefined;
+    host.sensors.system_health = 'OK';
+    host.sensors.cpu_temp_c = 39;
+    host.power_status = 'ON';
+
+    alert.status = 'RESOLVED';
+    alert.resolved_at = new Date().toISOString();
+
+    this.addLog(
+      'agent',
+      'eph-agent',
+      `[AUTONOMOUS_HEALING] Successfully self-healed node ${host.name} for alert ${alert.id}`,
+      'success',
+      actions.join('\n')
+    );
+
+    this.agentTelemetry.autonomous_decisions_count += 1;
+
+    return {
+      success: true,
+      actions_taken: actions,
+      host,
+    };
+  }
+
+  public dispatchAlertToEnterpriseApp(
+    alertId: string,
+    channel: 'feishu' | 'dingtalk' | 'wecom'
+  ): { success: boolean; channel: string; message_id: string } {
+    const alert = this.alerts.get(alertId);
+    if (!alert) {
+      throw new Error(`Alert '${alertId}' not found`);
+    }
+
+    if (!alert.dispatched_channels.includes(channel)) {
+      alert.dispatched_channels.push(channel);
+    }
+
+    const messageId = `msg_${channel}_alt_${Date.now()}`;
+
+    this.addLog(
+      'agent',
+      'eph-agent',
+      `[ALERT_DISPATCH] Broadcasted node alert (${alert.rule}) to ${channel.toUpperCase()} webhook`,
+      'info',
+      `Payload signed & encrypted. Target: ${alert.host_name}, Severity: ${alert.severity}`
+    );
+
+    return {
+      success: true,
+      channel,
+      message_id: messageId,
+    };
+  }
+
+  public dismissAlert(alertId: string): boolean {
+    const alert = this.alerts.get(alertId);
+    if (!alert) return false;
+    alert.status = 'RESOLVED';
+    alert.resolved_at = new Date().toISOString();
+    return true;
   }
 }
 

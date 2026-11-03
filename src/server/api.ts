@@ -427,6 +427,105 @@ apiRouter.post('/plugins/:id/configure', (req: Request, res: Response) => {
   res.json({ success: true, data: updated });
 });
 
+apiRouter.get('/plugins/presets', (_req: Request, res: Response) => {
+  res.json({ data: PluginRegistry.getPresets() });
+});
+
+apiRouter.post('/plugins/create', (req: Request, res: Response) => {
+  const principal = (req as any).principal;
+  const isAuthorized = principal.role === 'PLATFORM_ADMIN' || principal.role === 'CONNECTOR_ADMIN' || principal.role === 'APP_DEVELOPER';
+  if (!isAuthorized) {
+    return res.status(403).json({
+      error: { code: 'FORBIDDEN', message: 'Unauthorized to register custom plugins.' },
+    });
+  }
+
+  const { name, name_zh, category, provider, description, description_zh, auth_type, endpoint, api_key, tool_id, tool_name, tool_description, risk, sample_args } = req.body;
+  if (!name || !tool_id) {
+    return res.status(400).json({ error: { code: 'MISSING_FIELDS', message: 'name and tool_id are required' } });
+  }
+
+  try {
+    const plugin = PluginRegistry.createCustomPlugin({
+      name,
+      name_zh,
+      category,
+      provider,
+      description: description || `Custom integration connector for ${name}`,
+      description_zh,
+      auth_type,
+      endpoint,
+      api_key,
+      tool_id,
+      tool_name,
+      tool_description,
+      risk,
+      sample_args,
+    });
+
+    // Also register tool in globalStore tools
+    plugin.tools.forEach(t => {
+      globalStore.tools.set(t.id, t);
+    });
+
+    globalStore.recordAudit({
+      trace_id: `tr_plugin_create_${Date.now()}`,
+      tenant_id: principal.tenant_id,
+      project_id: principal.active_project_id,
+      actor_id: principal.actor_id,
+      actor_name: principal.actor_name,
+      actor_role: principal.role,
+      event_type: 'CONNECTOR_STATUS_CHANGE',
+      target_resource: `Plugin/${plugin.id}`,
+      summary: `Created and registered custom connector '${plugin.name}' with tool '${tool_id}'`,
+      payload_redacted: { plugin_id: plugin.id, tool_id, provider: plugin.provider, auth_type: plugin.auth_type },
+      status: 'SUCCESS',
+    });
+
+    res.json({ success: true, data: plugin });
+  } catch (err: any) {
+    res.status(500).json({ error: { code: 'CREATE_FAILED', message: err.message } });
+  }
+});
+
+apiRouter.delete('/plugins/:id', (req: Request, res: Response) => {
+  const principal = (req as any).principal;
+  const isAuthorized = principal.role === 'PLATFORM_ADMIN' || principal.role === 'CONNECTOR_ADMIN';
+  if (!isAuthorized) {
+    return res.status(403).json({
+      error: { code: 'FORBIDDEN', message: 'Only PLATFORM_ADMIN or CONNECTOR_ADMIN can delete plugins.' },
+    });
+  }
+
+  const plugin = PluginRegistry.getPlugin(req.params.id);
+  if (!plugin) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Plugin not found' } });
+  }
+
+  // Remove tools from global store
+  plugin.tools.forEach(t => {
+    globalStore.tools.delete(t.id);
+  });
+
+  PluginRegistry.deletePlugin(req.params.id);
+
+  globalStore.recordAudit({
+    trace_id: `tr_plugin_del_${Date.now()}`,
+    tenant_id: principal.tenant_id,
+    project_id: principal.active_project_id,
+    actor_id: principal.actor_id,
+    actor_name: principal.actor_name,
+    actor_role: principal.role,
+    event_type: 'CONNECTOR_STATUS_CHANGE',
+    target_resource: `Plugin/${req.params.id}`,
+    summary: `Deleted custom connector '${plugin.name}'`,
+    payload_redacted: { plugin_id: req.params.id },
+    status: 'SUCCESS',
+  });
+
+  res.json({ success: true, data: { deleted_id: req.params.id } });
+});
+
 apiRouter.post('/weather/query', (req: Request, res: Response) => {
   const { city = 'Beijing', units = 'metric' } = req.body;
   const weather = WeatherEngine.queryWeather(city, units);
@@ -1289,5 +1388,93 @@ apiRouter.get('/metal3/logs', (req: Request, res: Response) => {
   const { stream } = req.query;
   const logs = globalMetal3Engine.getLogs(stream as any);
   res.json({ data: logs });
+});
+
+// Metal3 Proactive Alerting Endpoints
+apiRouter.get('/metal3/alerts', (_req: Request, res: Response) => {
+  res.json({ data: globalMetal3Engine.getAlerts() });
+});
+
+apiRouter.post('/metal3/alerts/simulate', (req: Request, res: Response) => {
+  const principal = (req as any).principal;
+  const { host_name, rule } = req.body;
+  const alert = globalMetal3Engine.simulateAlert(host_name, rule);
+
+  globalStore.recordAudit({
+    trace_id: `tr_alt_sim_${Date.now()}`,
+    tenant_id: principal.tenant_id,
+    project_id: principal.active_project_id,
+    actor_id: principal.actor_id,
+    actor_name: principal.actor_name,
+    actor_role: principal.role,
+    event_type: 'TOOL_INVOKED',
+    target_resource: `HostAlert/${alert.id}`,
+    summary: `Injected proactive failure simulation alert for host '${alert.host_name}' (${alert.rule})`,
+    payload_redacted: { alert_id: alert.id, host: alert.host_name, rule: alert.rule, severity: alert.severity },
+    status: 'SUCCESS',
+  });
+
+  res.json({ success: true, data: alert });
+});
+
+apiRouter.post('/metal3/alerts/:id/remediate', (req: Request, res: Response) => {
+  const principal = (req as any).principal;
+  const { id } = req.params;
+
+  try {
+    const result = globalMetal3Engine.autoRemediateAlert(id);
+
+    globalStore.recordAudit({
+      trace_id: `tr_alt_rem_${Date.now()}`,
+      tenant_id: principal.tenant_id,
+      project_id: principal.active_project_id,
+      actor_id: principal.actor_id,
+      actor_name: principal.actor_name,
+      actor_role: principal.role,
+      event_type: 'WORKFLOW_PUBLISHED',
+      target_resource: `HostAlert/${id}`,
+      summary: `Autonomous AI Agent executed self-healing remediation on host '${result.host.name}'`,
+      payload_redacted: { alert_id: id, host_name: result.host.name, actions_taken: result.actions_taken },
+      status: 'SUCCESS',
+    });
+
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(404).json({ error: { code: 'ALERT_NOT_FOUND', message: err.message } });
+  }
+});
+
+apiRouter.post('/metal3/alerts/:id/dispatch', (req: Request, res: Response) => {
+  const principal = (req as any).principal;
+  const { id } = req.params;
+  const { channel = 'feishu' } = req.body;
+
+  try {
+    const result = globalMetal3Engine.dispatchAlertToEnterpriseApp(id, channel);
+
+    globalStore.recordAudit({
+      trace_id: `tr_alt_disp_${Date.now()}`,
+      tenant_id: principal.tenant_id,
+      project_id: principal.active_project_id,
+      actor_id: principal.actor_id,
+      actor_name: principal.actor_name,
+      actor_role: principal.role,
+      event_type: 'CONNECTOR_STATUS_CHANGE',
+      target_resource: `HostAlert/${id}`,
+      summary: `Dispatched proactive alert ${id} to ${channel.toUpperCase()} webhook notification channel`,
+      payload_redacted: { alert_id: id, channel, message_id: result.message_id },
+      status: 'SUCCESS',
+    });
+
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(404).json({ error: { code: 'ALERT_NOT_FOUND', message: err.message } });
+  }
+});
+
+apiRouter.post('/metal3/alerts/:id/dismiss', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const ok = globalMetal3Engine.dismissAlert(id);
+  res.json({ success: ok, data: { alert_id: id, dismissed: ok } });
 });
 

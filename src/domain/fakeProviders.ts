@@ -280,6 +280,86 @@ export class FakeToolExecutor {
           break;
         }
 
+        case 'wechat_send_template_msg': {
+          output = {
+            errcode: 0,
+            errmsg: 'ok',
+            msgid: 3881920391234,
+            touser: call.args.touser || 'oUpF8uMuAJO_demo',
+            delivered_at: new Date().toISOString(),
+            status: 'SENT_TO_USER_DEVICE',
+          };
+          break;
+        }
+
+        case 'qq_bot_send_msg': {
+          output = {
+            id: `qq_msg_${Date.now()}`,
+            channel_id: call.args.channel_id || '1099238821',
+            timestamp: new Date().toISOString(),
+            content_preview: call.args.content || 'Notice sent',
+            delivered: true,
+          };
+          break;
+        }
+
+        case 'meituan_order_query': {
+          output = {
+            order_id: call.args.order_id || 'MT_20261103_889921',
+            status: 'DELIVERING',
+            status_desc: '骑手已取货，正在送往目的地',
+            rider: { name: '王师傅', phone: '138****1234', lat: 31.2304, lng: 121.4737 },
+            eta_minutes: 12,
+            items: [
+              { name: '美式香浓咖啡', count: 2, price: 42.0 },
+              { name: '全麦金枪鱼三明治', count: 1, price: 28.5 },
+            ],
+            total_fee: 70.5,
+          };
+          break;
+        }
+
+        case 'rail12306_search_tickets': {
+          output = {
+            from: call.args.from_station || '北京南 (BJP)',
+            to: call.args.to_station || '上海虹桥 (AOH)',
+            travel_date: call.args.travel_date || '2026-11-05',
+            trains: [
+              { train_no: 'G1', depart_time: '09:00', arrive_time: '13:18', duration: '4h18m', second_seat: '有票', first_seat: '9张', business_seat: '2张' },
+              { train_no: 'G3', depart_time: '14:00', arrive_time: '18:24', duration: '4h24m', second_seat: '有票', first_seat: '有票', business_seat: '无票(可候补)' },
+              { train_no: 'G15', depart_time: '17:30', arrive_time: '21:58', duration: '4h28m', second_seat: '紧缺(余3)', first_seat: '无票', business_seat: '无票' },
+            ],
+          };
+          break;
+        }
+
+        case 'flight_query_status': {
+          output = {
+            flight_no: 'CA1501',
+            airline: 'Air China (中国国际航空)',
+            route: `${call.args.departure_code || 'PEK'} → ${call.args.arrival_code || 'SHA'}`,
+            scheduled_departure: '08:30',
+            estimated_departure: '08:35',
+            status: 'ON_TIME',
+            lowest_fare_cny: 680,
+            aircraft: 'Boeing 787-9 Dreamliner',
+            boarding_gate: 'C28',
+          };
+          break;
+        }
+
+        case 'alipay_create_trade': {
+          output = {
+            out_trade_no: call.args.out_trade_no || `ALI_${Date.now()}`,
+            trade_no: `20261103220014${Math.floor(Math.random() * 900000 + 100000)}`,
+            total_amount: call.args.total_amount || '128.50',
+            trade_status: 'TRADE_SUCCESS',
+            buyer_logon_id: 'usr***@alipay.com',
+            gmt_payment: new Date().toISOString(),
+          };
+          break;
+        }
+
         default:
           output = {
             tool_id: call.tool_id,

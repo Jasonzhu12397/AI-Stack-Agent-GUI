@@ -48,6 +48,10 @@ import {
   TrendingUp,
   ArrowUpCircle,
   ArrowDownCircle,
+  Bell,
+  BellRing,
+  ShieldAlert,
+  Wrench,
 } from 'lucide-react';
 import {
   BareMetalHost,
@@ -58,6 +62,7 @@ import {
   ProvisioningStatus,
   LogStreamType,
   EphAgentTelemetry,
+  HostAlert,
 } from '../domain/metal3';
 
 interface Metal3FleetViewProps {
@@ -126,16 +131,24 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   // Selected Host for Details / SOL Console Drawer
   const [selectedHost, setSelectedHost] = useState<BareMetalHost | null>(null);
 
+  // Proactive Fleet Alerts State
+  const [alerts, setAlerts] = useState<HostAlert[]>([]);
+  const [remediatingAlertId, setRemediatingAlertId] = useState<string | null>(null);
+  const [dispatchingChannel, setDispatchingChannel] = useState<{ alertId: string; channel: string } | null>(null);
+  const [simulatingAlert, setSimulatingAlert] = useState<boolean>(false);
+  const [alertFeedback, setAlertFeedback] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
+
   // Fetch Metal3 data from API
   const fetchMetal3Data = async () => {
     try {
       setRefreshing(true);
-      const [ephRes, bmhRes, clRes, logsRes, agentRes] = await Promise.all([
+      const [ephRes, bmhRes, clRes, logsRes, agentRes, alertsRes] = await Promise.all([
         fetch('/api/v1/metal3/eph-node').then(r => r.json()).catch(() => null),
         fetch('/api/v1/metal3/bmh').then(r => r.json()).catch(() => null),
         fetch('/api/v1/metal3/clusters').then(r => r.json()).catch(() => null),
         fetch('/api/v1/metal3/logs').then(r => r.json()).catch(() => null),
         fetch('/api/v1/metal3/agent/status').then(r => r.json()).catch(() => null),
+        fetch('/api/v1/metal3/alerts').then(r => r.json()).catch(() => null),
       ]);
 
       if (ephRes?.data) setEphNode(ephRes.data);
@@ -155,11 +168,92 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
       }
       if (logsRes?.data) setLogs(logsRes.data);
       if (agentRes?.data) setAgentTelemetry(agentRes.data);
+      if (alertsRes?.data) setAlerts(alertsRes.data);
     } catch (err) {
       console.error('Failed to fetch metal3 data:', err);
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  };
+
+  // Simulate Node Degradation / Provisioning Failure
+  const handleSimulateAlert = async (rule?: 'NODE_DEGRADED' | 'PROVISIONING_FAILED') => {
+    setSimulatingAlert(true);
+    try {
+      const res = await fetch('/api/v1/metal3/alerts/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule: rule || 'PROVISIONING_FAILED' }),
+      }).then(r => r.json());
+      if (res.data) {
+        setAlertFeedback({
+          message:
+            language === 'zh'
+              ? `已成功注入硬件异常演练 (${res.data.host_name}) [${res.data.error_code}]`
+              : `Fault drill injected for (${res.data.host_name}) [${res.data.error_code}]`,
+          type: 'info',
+        });
+        await fetchMetal3Data();
+      }
+    } catch (err) {
+      console.error('Simulate alert failed:', err);
+    } finally {
+      setSimulatingAlert(false);
+    }
+  };
+
+  // Autonomous Self-Healing by AI Agent
+  const handleRemediateAlert = async (alertId: string) => {
+    setRemediatingAlertId(alertId);
+    try {
+      const res = await fetch(`/api/v1/metal3/alerts/${alertId}/remediate`, {
+        method: 'POST',
+      }).then(r => r.json());
+      if (res.success) {
+        setAlertFeedback({
+          message: t.alertRemediationSuccess,
+          type: 'success',
+        });
+        await fetchMetal3Data();
+      }
+    } catch (err) {
+      console.error('Remediate alert failed:', err);
+    } finally {
+      setRemediatingAlertId(null);
+    }
+  };
+
+  // Dispatch alert to Enterprise Chatbot
+  const handleDispatchAlert = async (alertId: string, channel: 'feishu' | 'dingtalk' | 'wecom') => {
+    setDispatchingChannel({ alertId, channel });
+    try {
+      const res = await fetch(`/api/v1/metal3/alerts/${alertId}/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel }),
+      }).then(r => r.json());
+      if (res.success) {
+        setAlertFeedback({
+          message: `${t.alertDispatchSuccess} (${channel.toUpperCase()})`,
+          type: 'success',
+        });
+        await fetchMetal3Data();
+      }
+    } catch (err) {
+      console.error('Dispatch alert failed:', err);
+    } finally {
+      setDispatchingChannel(null);
+    }
+  };
+
+  // Dismiss / Mark Alert Resolved
+  const handleDismissAlert = async (alertId: string) => {
+    try {
+      await fetch(`/api/v1/metal3/alerts/${alertId}/dismiss`, { method: 'POST' });
+      await fetchMetal3Data();
+    } catch (err) {
+      console.error('Dismiss alert failed:', err);
     }
   };
 
@@ -617,6 +711,218 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
         </div>
       </div>
 
+      {/* Proactive Health Alerts Feedback Toast */}
+      {alertFeedback && (
+        <div
+          className={`p-3.5 rounded-xl border flex items-center justify-between text-xs transition animate-in fade-in duration-200 ${
+            alertFeedback.type === 'success'
+              ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
+              : 'bg-indigo-950/80 border-indigo-700 text-indigo-300'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{alertFeedback.message}</span>
+          </div>
+          <button
+            onClick={() => setAlertFeedback(null)}
+            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Proactive Health Alert System Banner */}
+      {(() => {
+        const activeAlerts = alerts.filter(a => a.status !== 'RESOLVED');
+        if (activeAlerts.length > 0) {
+          return (
+            <div className="p-4 rounded-xl border border-rose-500/70 bg-gradient-to-r from-rose-950/50 via-slate-900 to-rose-950/40 shadow-xl shadow-rose-950/30 space-y-3.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-rose-900/60 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-lg bg-rose-900/60 text-rose-300 border border-rose-700">
+                    <BellRing className="w-4 h-4 animate-bounce" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-bold text-white tracking-tight">{t.alertBannerTitle}</h3>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-rose-600 text-white animate-pulse">
+                        {activeAlerts.length} {t.alertDegradedCount}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-rose-300/80 mt-0.5">
+                      {language === 'zh'
+                        ? 'eph-node AI Agent 智能感知 BareMetalHost 降级与装机中断，支持带外一键自愈与协同群告警派发。'
+                        : 'eph-node AI Agent actively senses baremetal degradation and provisioning interruptions, providing out-of-band self-healing & bot dispatch.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => handleSimulateAlert('NODE_DEGRADED')}
+                    disabled={simulatingAlert}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-rose-300 border border-rose-800/80 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
+                    title="Simulate Node Degraded Alert"
+                  >
+                    <Flame className="w-3.5 h-3.5 text-amber-400" />
+                    <span>{simulatingAlert ? '...' : (language === 'zh' ? '模拟性能降级 (Degraded)' : 'Drill: Degraded')}</span>
+                  </button>
+                  <button
+                    onClick={() => handleSimulateAlert('PROVISIONING_FAILED')}
+                    disabled={simulatingAlert}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-rose-300 border border-rose-800/80 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
+                    title="Simulate Provisioning Failed Alert"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                    <span>{simulatingAlert ? '...' : (language === 'zh' ? '模拟装机中断 (Failed)' : 'Drill: Failed')}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Alert Items List */}
+              <div className="space-y-3">
+                {activeAlerts.map(alert => (
+                  <div
+                    key={alert.id}
+                    className="p-3.5 rounded-lg bg-slate-950/80 border border-rose-900/60 flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="space-y-1.5 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                            alert.severity === 'CRITICAL'
+                              ? 'bg-rose-950 text-rose-300 border-rose-700'
+                              : 'bg-amber-950 text-amber-300 border-amber-700'
+                          }`}
+                        >
+                          {alert.severity === 'CRITICAL' ? t.alertSeverityCritical : t.alertSeverityWarning}
+                        </span>
+                        <span className="font-mono font-bold text-white">{alert.host_name}</span>
+                        <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-900 text-slate-400 border border-slate-800">
+                          {alert.error_code}
+                        </span>
+                        <span className="text-[10px] font-mono text-slate-500">
+                          {new Date(alert.detected_at).toLocaleTimeString()}
+                        </span>
+                      </div>
+
+                      <div className="font-semibold text-slate-200">
+                        {language === 'zh' ? alert.title : alert.title_en}
+                      </div>
+
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        {language === 'zh' ? alert.message : alert.message_en}
+                      </p>
+
+                      {alert.diagnostics && (
+                        <div className="mt-1 flex flex-wrap gap-2 text-[10px] font-mono text-slate-400 bg-slate-900/60 p-2 rounded border border-slate-800">
+                          <span>Phase: {alert.diagnostics.phase}</span>
+                          <span>• BMC: {alert.diagnostics.bmc_ip}</span>
+                          {alert.diagnostics.temperature_c && <span>• Temp: {alert.diagnostics.temperature_c}°C</span>}
+                          <span className="text-amber-400/90">• {alert.diagnostics.error_detail}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Alert Action Buttons */}
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        onClick={() => handleRemediateAlert(alert.id)}
+                        disabled={remediatingAlertId === alert.id}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-md shadow-emerald-600/30 flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
+                      >
+                        <Wrench className={`w-3.5 h-3.5 ${remediatingAlertId === alert.id ? 'animate-spin' : ''}`} />
+                        <span>{remediatingAlertId === alert.id ? t.alertStatusResolving : t.alertAutoRemediateBtn}</span>
+                      </button>
+
+                      {/* Dispatch Buttons */}
+                      <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg p-0.5">
+                        <button
+                          onClick={() => handleDispatchAlert(alert.id, 'feishu')}
+                          disabled={dispatchingChannel?.alertId === alert.id}
+                          className={`px-2 py-1 rounded text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                            alert.dispatched_channels.includes('feishu')
+                              ? 'bg-blue-950 text-blue-300 border border-blue-700'
+                              : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                          }`}
+                          title="Dispatch to Feishu"
+                        >
+                          <Send className="w-3 h-3 text-blue-400" />
+                          <span>{language === 'zh' ? '飞书' : 'Feishu'}</span>
+                          {alert.dispatched_channels.includes('feishu') && <Check className="w-3 h-3 text-emerald-400" />}
+                        </button>
+                        <button
+                          onClick={() => handleDispatchAlert(alert.id, 'wecom')}
+                          disabled={dispatchingChannel?.alertId === alert.id}
+                          className={`px-2 py-1 rounded text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                            alert.dispatched_channels.includes('wecom')
+                              ? 'bg-emerald-950 text-emerald-300 border border-emerald-700'
+                              : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                          }`}
+                          title="Dispatch to WeCom"
+                        >
+                          <span>{language === 'zh' ? '企微' : 'WeCom'}</span>
+                          {alert.dispatched_channels.includes('wecom') && <Check className="w-3 h-3 text-emerald-400" />}
+                        </button>
+                        <button
+                          onClick={() => handleDispatchAlert(alert.id, 'dingtalk')}
+                          disabled={dispatchingChannel?.alertId === alert.id}
+                          className={`px-2 py-1 rounded text-[11px] font-medium transition cursor-pointer flex items-center gap-1 ${
+                            alert.dispatched_channels.includes('dingtalk')
+                              ? 'bg-amber-950 text-amber-300 border border-amber-700'
+                              : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                          }`}
+                          title="Dispatch to DingTalk"
+                        >
+                          <span>{language === 'zh' ? '钉钉' : 'DingTalk'}</span>
+                          {alert.dispatched_channels.includes('dingtalk') && <Check className="w-3 h-3 text-emerald-400" />}
+                        </button>
+                      </div>
+
+                      <button
+                        onClick={() => handleDismissAlert(alert.id)}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-800 text-xs transition cursor-pointer"
+                        title={t.alertDismissBtn}
+                      >
+                        {t.alertDismissBtn}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        }
+
+        // Nominal Zero-Alert state
+        return (
+          <div className="p-3.5 rounded-xl border border-slate-800 bg-slate-900/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 text-xs text-slate-300">
+              <div className="p-1.5 rounded-lg bg-emerald-950/70 border border-emerald-800 text-emerald-400">
+                <ShieldCheck className="w-4 h-4" />
+              </div>
+              <span className="font-medium">
+                {language === 'zh'
+                  ? '裸金属节点主动健康监控就绪: 全量 67 节点处于就绪/装机状态 (零活跃 Degraded / Failed 告警)'
+                  : 'Proactive Health Watchdog Active: All 67 baremetal hosts nominal (0 active Degraded/Failed alerts)'}
+              </span>
+            </div>
+
+            <button
+              onClick={() => handleSimulateAlert('PROVISIONING_FAILED')}
+              disabled={simulatingAlert}
+              className="px-3 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-700 text-amber-300 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
+              title="Simulate a node failure alert to verify watchdog & auto-healing"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+              <span>{simulatingAlert ? '...' : t.alertSimulateBtn}</span>
+            </button>
+          </div>
+        );
+      })()}
+
       {/* Main Navigation Sub-Tabs */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2">
         {/* Tab 1: Node Dashboard (Dedicated view for individual nodes) */}
@@ -874,16 +1180,23 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                 const isMaster = host.assigned_role === 'control-plane';
                 const isPowerOn = host.power_status === 'ON';
                 const isDraining = drainingHostName === host.name;
+                const hostAlert = alerts.find(a => a.host_name === host.name && a.status !== 'RESOLVED');
+                const isDegradedOrFailed =
+                  host.provisioning_status === 'Degraded' ||
+                  host.provisioning_status === 'Provisioning Failed' ||
+                  !!hostAlert;
 
                 return (
                   <div
                     key={host.name}
-                    className={`bg-slate-900 border rounded-xl p-4 transition-all hover:border-slate-700 flex flex-col justify-between ${
-                      host.provisioning_status === 'Provisioning'
-                        ? 'border-cyan-600/60 shadow-lg shadow-cyan-950/20'
-                        : isPowerOn
-                          ? 'border-slate-800 hover:shadow-md hover:shadow-indigo-950/20'
-                          : 'border-slate-800/60 opacity-80'
+                    className={`border rounded-xl p-4 transition-all hover:border-slate-700 flex flex-col justify-between ${
+                      isDegradedOrFailed
+                        ? 'border-rose-500/80 shadow-lg shadow-rose-950/40 bg-gradient-to-b from-rose-950/30 via-slate-900 to-slate-900'
+                        : host.provisioning_status === 'Provisioning'
+                          ? 'bg-slate-900 border-cyan-600/60 shadow-lg shadow-cyan-950/20'
+                          : isPowerOn
+                            ? 'bg-slate-900 border-slate-800 hover:shadow-md hover:shadow-indigo-950/20'
+                            : 'bg-slate-900 border-slate-800/60 opacity-80'
                     }`}
                   >
                     <div>
@@ -895,6 +1208,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
                               {host.rack_location}
                             </span>
+                            {isDegradedOrFailed && (
+                              <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-rose-600 text-white animate-pulse">
+                                ALERT
+                              </span>
+                            )}
                           </div>
                           <div className="text-[11px] text-slate-400 truncate mt-0.5">{host.hardware.model}</div>
                         </div>
@@ -944,13 +1262,15 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                           </span>
                           <span
                             className={`font-mono font-semibold ${
-                              host.provisioning_status === 'ActiveInCluster'
-                                ? 'text-emerald-400'
-                                : host.provisioning_status === 'Provisioning'
-                                  ? 'text-cyan-400'
-                                  : host.provisioning_status === 'Inspecting'
-                                    ? 'text-amber-400'
-                                    : 'text-slate-300'
+                              isDegradedOrFailed
+                                ? 'text-rose-400 font-bold'
+                                : host.provisioning_status === 'ActiveInCluster'
+                                  ? 'text-emerald-400'
+                                  : host.provisioning_status === 'Provisioning'
+                                    ? 'text-cyan-400'
+                                    : host.provisioning_status === 'Inspecting'
+                                      ? 'text-amber-400'
+                                      : 'text-slate-300'
                             }`}
                           >
                             {host.provisioning_status}
@@ -959,13 +1279,15 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                         <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
                           <div
                             className={`h-full transition-all duration-500 ${
-                              host.provisioning_status === 'ActiveInCluster'
-                                ? 'bg-emerald-500'
-                                : host.provisioning_status === 'Provisioning'
-                                  ? 'bg-cyan-500 animate-pulse'
-                                  : host.provisioning_status === 'Inspecting'
-                                    ? 'bg-amber-500'
-                                    : 'bg-slate-600'
+                              isDegradedOrFailed
+                                ? 'bg-rose-500'
+                                : host.provisioning_status === 'ActiveInCluster'
+                                  ? 'bg-emerald-500'
+                                  : host.provisioning_status === 'Provisioning'
+                                    ? 'bg-cyan-500 animate-pulse'
+                                    : host.provisioning_status === 'Inspecting'
+                                      ? 'bg-amber-500'
+                                      : 'bg-slate-600'
                             }`}
                             style={{ width: `${host.provisioning_progress_percent}%` }}
                           />
@@ -1040,6 +1362,29 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                           </span>
                         </div>
                       )}
+
+                      {/* Active Alert Notification on Card */}
+                      {hostAlert && (
+                        <div className="p-2.5 rounded-lg bg-rose-950/90 border border-rose-800 mb-3 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-mono font-bold text-rose-300 flex items-center gap-1">
+                              <BellRing className="w-3 h-3 text-rose-400 animate-pulse" />
+                              {hostAlert.severity}: {hostAlert.error_code}
+                            </span>
+                            <button
+                              onClick={() => handleRemediateAlert(hostAlert.id)}
+                              disabled={remediatingAlertId === hostAlert.id}
+                              className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-semibold flex items-center gap-1 transition cursor-pointer"
+                            >
+                              <Wrench className={`w-2.5 h-2.5 ${remediatingAlertId === hostAlert.id ? 'animate-spin' : ''}`} />
+                              <span>{remediatingAlertId === hostAlert.id ? '...' : (language === 'zh' ? 'AI 自愈' : 'Auto-Heal')}</span>
+                            </button>
+                          </div>
+                          <div className="text-[10px] text-rose-200/90 leading-tight line-clamp-2">
+                            {language === 'zh' ? hostAlert.message : hostAlert.message_en}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Quick Power Actions & SOL Inspector */}
@@ -1095,10 +1440,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
 
                       <button
                         onClick={() => setSelectedHost(host)}
-                        className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-700/60 text-[11px] font-semibold flex items-center gap-1 transition cursor-pointer"
+                        className="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-700/60 text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                        title={language === 'zh' ? '查看节点详细配置、带外传感器与串口控制台 (SOL)' : 'View Host Details, Sensors & SOL Serial Console'}
                       >
-                        <Terminal className="w-3 h-3" />
-                        <span>{language === 'zh' ? '串口/传感器' : 'SOL'}</span>
+                        <Eye className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>{t.btnSol}</span>
                       </button>
                     </div>
                   </div>
@@ -1186,9 +1532,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                             )}
                             <button
                               onClick={() => setSelectedHost(host)}
-                              className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-sans transition cursor-pointer"
+                              className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-medium transition cursor-pointer inline-flex items-center gap-1"
+                              title={language === 'zh' ? '查看节点详情与控制台' : 'View Host Details & Console'}
                             >
-                              {language === 'zh' ? '查看串口' : 'SOL'}
+                              <Eye className="w-3 h-3 text-indigo-400" />
+                              <span>{t.btnSol}</span>
                             </button>
                           </td>
                         </tr>
@@ -1950,9 +2298,15 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
             <div className="bg-slate-950 px-6 py-4 border-b border-slate-800 flex items-center justify-between">
               <div>
                 <div className="flex items-center gap-3">
-                  <span className="text-base font-bold font-mono text-white">{selectedHost.name}</span>
+                  <span className="text-base font-bold font-mono text-white flex items-center gap-2">
+                    <Eye className="w-4 h-4 text-indigo-400" />
+                    {selectedHost.name}
+                  </span>
                   <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">
                     {selectedHost.rack_location}
+                  </span>
+                  <span className="text-xs text-indigo-300 font-medium">
+                    ({language === 'zh' ? '节点详情与带外控制台' : 'Node Details & OOB Console'})
                   </span>
                   <span
                     className={`px-2 py-0.5 rounded text-xs font-mono font-bold ${

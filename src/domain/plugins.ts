@@ -578,6 +578,234 @@ export class PluginRegistry {
     }
     return tools;
   }
+
+  public static getPresets(): any[] {
+    return [
+      {
+        id: 'wechat_app_connector',
+        name: 'WeChat (微信) Service & MiniApp Connector',
+        name_zh: '微信服务号与小程序消息管理',
+        category: 'DOMESTIC_APPS',
+        provider: 'WECHAT',
+        version: '1.2.0',
+        description: 'Send template messages, query user OpenID, and manage WeChat Official Account notifications.',
+        description_zh: '微信服务号模板消息下发、用户 OpenID 查询与业务通知管理。',
+        icon: 'MessageCircle',
+        auth_type: 'API_KEY',
+        endpoint: 'https://api.weixin.qq.com/cgi-bin/message/template/send',
+        tool_id: 'wechat_send_template_msg',
+        tool_name: 'WeChat Template Message Dispatcher',
+        tool_description: 'Sends automated customer notices and order alerts via WeChat Service Account.',
+        risk: 'MEDIUM',
+        sample_args: {
+          touser: 'oUpF8uMuAJO_M2pxb1Q9zNjWeChat',
+          template_id: 'ngqIpbwh8bUfcSsECmogfXbaImm3q_example',
+          url: 'https://myapp.com/orders/1024',
+          data: { first: '您的高铁退票申请已通过', keyword1: 'G1024', keyword2: '已退款' },
+        },
+      },
+      {
+        id: 'qq_bot_connector',
+        name: 'QQ Open Platform Guild & Group Bot',
+        name_zh: 'QQ 频道与群机器人连接器',
+        category: 'DOMESTIC_APPS',
+        provider: 'QQ',
+        version: '1.0.4',
+        description: 'Dispatch notifications, markdown embeds, and interactive cards to QQ channels and groups.',
+        description_zh: 'QQ 开放平台机器人消息推送，支持频道子频道与企业 QQ 群消息广播。',
+        icon: 'Bot',
+        auth_type: 'BEARER_TOKEN',
+        endpoint: 'https://api.sgroup.qq.com/channels/{channel_id}/messages',
+        tool_id: 'qq_bot_send_msg',
+        tool_name: 'QQ Bot Notification Dispatcher',
+        tool_description: 'Sends messages to target QQ Guild channel or user group with bot credentials.',
+        risk: 'LOW',
+        sample_args: {
+          channel_id: '1099238821',
+          content: '🚀 AI Agent Studio: High-speed rail tickets secured for Beijing -> Shanghai',
+          msg_type: 'text',
+        },
+      },
+      {
+        id: 'meituan_open_connector',
+        name: 'Meituan (美团) Merchant & Delivery API',
+        name_zh: '美团外卖与生活服务开放平台',
+        category: 'DOMESTIC_APPS',
+        provider: 'MEITUAN',
+        version: '2.0.1',
+        description: 'Query merchant orders, verify e-vouchers, and track live takeout delivery rider locations.',
+        description_zh: '美团商家外卖订单查询、到店团购券核销与实时骑手配送轨迹追踪。',
+        icon: 'ShoppingBag',
+        auth_type: 'HMAC_SHA256',
+        endpoint: 'https://api-open-cater.meituan.com/waimai/order/query',
+        tool_id: 'meituan_order_query',
+        tool_name: 'Meituan Order & Voucher Inspector',
+        tool_description: 'Queries takeout order fulfillment status and validates group-buying voucher codes.',
+        risk: 'MEDIUM',
+        sample_args: {
+          order_id: 'MT_20261103_889921',
+          poi_id: 'poi_shanghai_central_01',
+          include_rider_tracking: true,
+        },
+      },
+      {
+        id: 'rail12306_connector',
+        name: 'China Railway 12306 (中国高铁客运)',
+        name_zh: '12306 高铁火车票余票与时刻表',
+        category: 'SYSTEM_TOOLS',
+        provider: 'RAIL12306',
+        version: '3.1.0',
+        description: 'Real-time remaining ticket inquiries, train timetables, transfer planning, and station departure boards.',
+        description_zh: '全国高铁/动车余票实时检索、经停时刻表排查、中转换乘推荐与候补状态提醒。',
+        icon: 'Train',
+        auth_type: 'API_KEY',
+        endpoint: 'https://kyfw.12306.cn/otn/leftTicket/query',
+        tool_id: 'rail12306_search_tickets',
+        tool_name: '12306 Train Ticket & Schedule Query',
+        tool_description: 'Fetches high-speed train numbers, ticket classes (First/Second/Business), and availability.',
+        risk: 'LOW',
+        sample_args: {
+          from_station: 'BJP (北京)',
+          to_station: 'SHH (上海)',
+          travel_date: '2026-11-05',
+          train_type: 'G_HIGH_SPEED',
+        },
+      },
+      {
+        id: 'flight_booking_connector',
+        name: 'Civil Aviation Flight Tracker & Booking',
+        name_zh: '民航特惠机票预订与航班动态',
+        category: 'SYSTEM_TOOLS',
+        provider: 'AIRLINE_FLIGHTS',
+        version: '2.4.0',
+        description: 'Flight live status, delay alerts, low-fare calendar lookup, and boarding gate change broadcasts.',
+        description_zh: '国内外航班起降动态、准点率预测、特惠低价机票比价与值机登机口提醒。',
+        icon: 'Plane',
+        auth_type: 'API_KEY',
+        endpoint: 'https://api.aviation-connect.org/v2/flights/search',
+        tool_id: 'flight_query_status',
+        tool_name: 'Flight Status & Ticket Price Scanner',
+        tool_description: 'Scans commercial airline flight routes, current air traffic delays, and seat prices.',
+        risk: 'LOW',
+        sample_args: {
+          departure_code: 'PEK',
+          arrival_code: 'SHA',
+          flight_date: '2026-11-06',
+          airline: 'CA',
+        },
+      },
+      {
+        id: 'alipay_connector',
+        name: 'Alipay (支付宝) Merchant & Reconciliation API',
+        name_zh: '支付宝开放平台与支付交易对账',
+        category: 'DOMESTIC_APPS',
+        provider: 'ALIPAY',
+        version: '3.0.0',
+        description: 'Merchant payment creation, refund status query, transaction order reconciliation, and bill download.',
+        description_zh: '支付宝商户收单发起、交易退款追溯、日度财务账单对账与资金流水核验。',
+        icon: 'CreditCard',
+        auth_type: 'HMAC_SHA256',
+        endpoint: 'https://openapi.alipay.com/gateway.do',
+        tool_id: 'alipay_create_trade',
+        tool_name: 'Alipay Payment & Refund Manager',
+        tool_description: 'Handles online merchant trade creations, query refund status, and verifies RSA2 signatures.',
+        risk: 'HIGH',
+        sample_args: {
+          out_trade_no: 'ALI_TR_20261103_0019',
+          total_amount: '128.50',
+          subject: 'AI Agent Studio Cloud Quota License',
+          product_code: 'FAST_INSTANT_TRADE_PAY',
+        },
+      },
+    ];
+  }
+
+  public static createCustomPlugin(input: {
+    id?: string;
+    name: string;
+    name_zh?: string;
+    category?: PluginCategory;
+    provider?: string;
+    version?: string;
+    description: string;
+    description_zh?: string;
+    icon?: string;
+    auth_type?: 'API_KEY' | 'WEBHOOK_SECRET' | 'HMAC_SHA256' | 'BEARER_TOKEN' | 'NONE';
+    endpoint?: string;
+    api_key?: string;
+    tool_id: string;
+    tool_name?: string;
+    tool_description?: string;
+    risk?: RiskLevel;
+    sample_args?: Record<string, any>;
+  }): PluginItem {
+    const pluginId = input.id || `custom_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const toolId = input.tool_id || `tool_${pluginId}`;
+
+    const toolDef: ToolDefinition = {
+      id: toolId,
+      name: input.tool_name || input.name,
+      version: input.version || '1.0.0',
+      description: input.tool_description || input.description,
+      category: input.category === 'SYSTEM_TOOLS' ? 'SYSTEM' : 'COMMUNICATION',
+      input_schema: {
+        type: 'object',
+        properties: {
+          target: { type: 'string', description: 'Target identifier or URL' },
+          payload: { type: 'object', description: 'Request payload parameters' },
+        },
+      },
+      output_schema: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean' },
+          data: { type: 'object' },
+        },
+      },
+      permissions: ['EXECUTE_PLUGIN_TOOL'],
+      risk: input.risk || 'LOW',
+      idempotency_mode: 'IDEMPOTENT',
+      timeout_ms: 5000,
+      retry_policy: { max_retries: 2, backoff_ms: 100 },
+      network_targets: [input.endpoint ? new URL(input.endpoint).hostname : 'api.external.service'],
+      is_active: true,
+      is_fake: false,
+    };
+
+    const pluginItem: PluginItem = {
+      id: pluginId,
+      name: input.name,
+      name_zh: input.name_zh || input.name,
+      category: input.category || 'DOMESTIC_APPS',
+      provider: (input.provider?.toUpperCase() as any) || 'CUSTOM',
+      version: input.version || '1.0.0',
+      description: input.description,
+      description_zh: input.description_zh || input.description,
+      icon: input.icon || 'PlugZap',
+      is_active: true,
+      is_configured: true,
+      auth_type: input.auth_type || 'API_KEY',
+      config: {
+        endpoint: input.endpoint,
+        api_key_ref: input.api_key ? `vault://custom/${pluginId}/key` : undefined,
+        timeout_ms: 4000,
+      },
+      metrics: {
+        total_calls: 0,
+        success_calls: 0,
+        error_calls: 0,
+        p95_latency_ms: 60,
+      },
+      tools: [toolDef],
+    };
+
+    this.plugins.set(pluginItem.id, pluginItem);
+    return pluginItem;
+  }
+
+  public static deletePlugin(id: string): boolean {
+    return this.plugins.delete(id);
+  }
 }
 
 /**
