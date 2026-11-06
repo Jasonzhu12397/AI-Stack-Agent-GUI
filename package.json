@@ -5,11 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
+    "dev:backend": "PORT=9090 ./bin/agent-studio-go-server",
     "start": "tsx server.ts",
-    "build": "vite build",
+    "start:backend": "PORT=9090 ./bin/agent-studio-go-server",
+    "build": "vite build && cd backend-go && go build -ldflags=\"-w -s\" -o ../bin/agent-studio-go-server ./cmd/server",
+    "build:go": "cd backend-go && go build -ldflags=\"-w -s\" -o ../bin/agent-studio-go-server ./cmd/server",
+    "test:go": "cd backend-go && go test -v ./...",
     "preview": "vite preview",
-    "clean": "rm -rf dist server.js",
-    "test": "tsx --test src/domain/*.test.ts src/server/*.test.ts src/context/*.test.ts",
+    "clean": "rm -rf dist server.js bin/agent-studio-go-server",
+    "test": "cd backend-go && go test -v ./... && tsx --test src/domain/*.test.ts src/server/*.test.ts src/context/*.test.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

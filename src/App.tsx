@@ -9,6 +9,7 @@ import { AuditView } from './components/AuditView';
 import { DocsAndMatrixView } from './components/DocsAndMatrixView';
 import { OrgMembersView } from './components/OrgMembersView';
 import { Metal3FleetView } from './components/Metal3FleetView';
+import { BackendConsoleView } from './components/BackendConsoleView';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
 import {
   Principal,
@@ -374,6 +375,12 @@ function AppContent() {
             )}
 
             {activeTab === 'matrix' && <DocsAndMatrixView />}
+            {activeTab === 'backend' && (
+              <BackendConsoleView
+                currentPrincipal={currentPrincipal}
+                onRefresh={fetchAllData}
+              />
+            )}
           </>
         )}
       </main>

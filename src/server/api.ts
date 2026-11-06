@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { globalStore } from './store';
 import { PolicyEngine } from '../domain/policyEngine';
 import { RunStateMachine } from '../domain/stateMachine';
@@ -80,9 +82,289 @@ apiRouter.get('/openapi.json', (req: Request, res: Response) => {
       '/api/v1/runs': { get: { summary: 'List execution runs' } },
       '/api/v1/approvals': { get: { summary: 'List approval requests' } },
       '/api/v1/audits': { get: { summary: 'List audit trail events' } },
+      '/api/v1/metal3/bmh': { get: { summary: 'List baremetal hosts' } },
+      '/api/v1/metal3/alerts': { get: { summary: 'List proactive node alerts' } },
+      '/api/v1/plugins': { get: { summary: 'List plugins' } },
+      '/api/v1/system/backend-overview': { get: { summary: 'Detailed runtime backend overview & architecture stats' } },
+      '/api/v1/system/routes': { get: { summary: 'List all registered backend REST routes' } },
+      '/api/v1/system/sql-schema': { get: { summary: 'Get PostgreSQL / Cloud SQL schema definition' } },
     },
   });
 });
+
+// System Backend Runtime Telemetry & Microservices Overview
+apiRouter.get('/system/backend-overview', (req: Request, res: Response) => {
+  const mem = process.memoryUsage();
+  res.json({
+    success: true,
+    data: {
+      server: {
+        engine: 'Node.js Express Fullstack Gateway',
+        node_version: process.version,
+        platform: process.platform,
+        arch: process.arch,
+        pid: process.pid,
+        port: process.env.PORT || 3000,
+        uptime_seconds: Math.floor(process.uptime()),
+        env: process.env.NODE_ENV || 'development',
+      },
+      memory: {
+        rss_mb: Math.round(mem.rss / 1024 / 1024),
+        heap_used_mb: Math.round(mem.heapUsed / 1024 / 1024),
+        heap_total_mb: Math.round(mem.heapTotal / 1024 / 1024),
+        external_mb: Math.round(mem.external / 1024 / 1024),
+      },
+      microservices: [
+        {
+          name: 'API Gateway & Middleware',
+          status: 'ACTIVE',
+          protocol: 'HTTP/1.1 REST + JSON',
+          port: 3000,
+          details: 'Zero-trust Bearer / Session header validation, rate-limiter, CORS & Content-Security-Policy',
+        },
+        {
+          name: 'Zero-Trust Policy Engine (RBAC)',
+          status: 'ACTIVE',
+          protocol: 'In-Process Security Evaluator',
+          details: 'Default-deny object authorization, grant intersection, cryptographic SHA-256 plan hash enforcement',
+        },
+        {
+          name: 'Agent & Workflow DAG Execution Engine',
+          status: 'ACTIVE',
+          protocol: 'Deterministic State Machine',
+          details: 'Topological task batching, cycle detection, human-in-the-loop pause/resume gatekeeper',
+        },
+        {
+          name: 'Metal3 BareMetal Fleet & Ironic Conductor',
+          status: 'ACTIVE',
+          protocol: 'Redfish OOB + IPMI + iPXE',
+          details: 'Ephemeral bootstrap node (eph-node) orchestrator, UEFI PXE streaming, CAPI pivot controller',
+        },
+        {
+          name: 'Domestic Connectors & Third-Party Plugin Router',
+          status: 'ACTIVE',
+          protocol: 'HMAC-SHA256 Signed Webhooks',
+          details: 'Feishu, DingTalk, WeCom, WeChat, QQ, Meituan, 12306, Flights, Alipay and custom REST endpoints',
+        },
+        {
+          name: 'Write-Ahead-Log (WAL) Storage & Database',
+          status: 'ACTIVE',
+          protocol: 'Transactional Memory + SQL Schema',
+          details: 'Strict append-only audit event logging, zero secret retention, PostgreSQL / Cloud SQL compatible',
+        },
+      ],
+      database: {
+        type: 'Transactional WAL Store (PostgreSQL / Cloud SQL DDL aligned)',
+        tables: {
+          tenants: globalStore.tenants.size,
+          projects: globalStore.projects.size,
+          users: globalStore.members.size,
+          agents: globalStore.agents.size,
+          workflows: globalStore.workflows.size,
+          runs: globalStore.runs.size,
+          approvals: globalStore.approvals.size,
+          audits: globalStore.audits.length,
+          plugins: PluginRegistry.getAllPlugins().length,
+          bare_metal_hosts: globalMetal3Engine.hosts.size,
+          host_alerts: globalMetal3Engine.alerts.size,
+        },
+      },
+      worker_pool: {
+        active_workers: 4,
+        lease_timeout_sec: 30,
+        concurrency_limit: 20,
+        active_background_daemons: [
+          'Metal3 Proactive Alert Watchdog',
+          'Ironic Conductor Power Sync Loop',
+          'Audit Log Cryptographic Hash Archiver',
+          'Workflow State Reconciliation Daemon',
+        ],
+      },
+    },
+  });
+});
+
+// System Backend All Registered Routes
+apiRouter.get('/system/routes', (_req: Request, res: Response) => {
+  const routes = [
+    // System
+    { category: 'SYSTEM', method: 'GET', path: '/api/v1/health', auth: 'PUBLIC', description: 'System health check & component heartbeats' },
+    { category: 'SYSTEM', method: 'GET', path: '/api/v1/system/backend-overview', auth: 'PUBLIC', description: 'Full runtime backend architecture, memory & worker stats' },
+    { category: 'SYSTEM', method: 'GET', path: '/api/v1/system/routes', auth: 'PUBLIC', description: 'Complete registry of all backend endpoints' },
+    { category: 'SYSTEM', method: 'GET', path: '/api/v1/system/sql-schema', auth: 'PUBLIC', description: 'Raw PostgreSQL / Cloud SQL schema DDL file' },
+    { category: 'SYSTEM', method: 'GET', path: '/api/v1/openapi.json', auth: 'PUBLIC', description: 'OpenAPI 3.1 schema specification' },
+
+    // Identity & RBAC
+    { category: 'IDENTITY', method: 'GET', path: '/api/v1/principals/me', auth: 'BEARER', description: 'Get current authenticated actor and role' },
+    { category: 'IDENTITY', method: 'GET', path: '/api/v1/principals', auth: 'BEARER', description: 'List available actors in system' },
+    { category: 'IDENTITY', method: 'POST', path: '/api/v1/principals/switch', auth: 'BEARER', description: 'Switch active actor context (RBAC test)' },
+    { category: 'IDENTITY', method: 'GET', path: '/api/v1/tenants', auth: 'BEARER', description: 'List accessible tenants' },
+    { category: 'IDENTITY', method: 'GET', path: '/api/v1/projects', auth: 'BEARER', description: 'List tenant projects' },
+    { category: 'IDENTITY', method: 'GET', path: '/api/v1/members', auth: 'BEARER', description: 'List organization members' },
+    { category: 'IDENTITY', method: 'POST', path: '/api/v1/members', auth: 'PLATFORM_ADMIN', description: 'Invite member to tenant' },
+    { category: 'IDENTITY', method: 'POST', path: '/api/v1/members/:id/revoke', auth: 'PLATFORM_ADMIN', description: 'Revoke member role binding' },
+    { category: 'IDENTITY', method: 'PUT', path: '/api/v1/tenants/:id/quota', auth: 'QUOTA_MANAGE', description: 'Update tenant quota limits' },
+    { category: 'IDENTITY', method: 'POST', path: '/api/v1/auth/oidc/verify', auth: 'PUBLIC', description: 'Verify OIDC token & production guard' },
+
+    // Agents
+    { category: 'AGENT', method: 'GET', path: '/api/v1/models', auth: 'BEARER', description: 'List supported AI model providers' },
+    { category: 'AGENT', method: 'GET', path: '/api/v1/agents', auth: 'BEARER', description: 'List tenant AI agents' },
+    { category: 'AGENT', method: 'POST', path: '/api/v1/agents', auth: 'APP_DEVELOPER', description: 'Create draft AI agent definition' },
+    { category: 'AGENT', method: 'POST', path: '/api/v1/agents/:id/run', auth: 'BEARER', description: 'Dispatch and execute agent run' },
+
+    // Workflows & DAG
+    { category: 'WORKFLOW', method: 'GET', path: '/api/v1/workflows', auth: 'BEARER', description: 'List workflow DAG graphs' },
+    { category: 'WORKFLOW', method: 'POST', path: '/api/v1/workflows', auth: 'APP_DEVELOPER', description: 'Create workflow definition with DAG validation' },
+    { category: 'WORKFLOW', method: 'POST', path: '/api/v1/workflows/:id/run', auth: 'BEARER', description: 'Execute topological DAG workflow run' },
+
+    // Runs & Approvals
+    { category: 'RUNS', method: 'GET', path: '/api/v1/runs', auth: 'BEARER', description: 'List execution runs' },
+    { category: 'RUNS', method: 'GET', path: '/api/v1/runs/:id', auth: 'BEARER', description: 'Get run details and step trace' },
+    { category: 'APPROVALS', method: 'GET', path: '/api/v1/approvals', auth: 'BEARER', description: 'List pending approval requests' },
+    { category: 'APPROVALS', method: 'POST', path: '/api/v1/approvals/:id/decide', auth: 'APPROVER', description: 'Approve or reject high-risk tool execution' },
+
+    // Metal3 BareMetal Fleet
+    { category: 'METAL3', method: 'GET', path: '/api/v1/metal3/eph-node', auth: 'BEARER', description: 'Get ephemeral bootstrap node state' },
+    { category: 'METAL3', method: 'GET', path: '/api/v1/metal3/bmh', auth: 'BEARER', description: 'List BareMetalHost CRD fleet' },
+    { category: 'METAL3', method: 'POST', path: '/api/v1/metal3/bmh/:name/power', auth: 'OPERATOR', description: 'Redfish out-of-band power control' },
+    { category: 'METAL3', method: 'POST', path: '/api/v1/metal3/bmh/:name/inspect', auth: 'OPERATOR', description: 'Trigger Ironic hardware inspector' },
+    { category: 'METAL3', method: 'GET', path: '/api/v1/metal3/clusters', auth: 'BEARER', description: 'List target baremetal clusters' },
+    { category: 'METAL3', method: 'POST', path: '/api/v1/metal3/clusters', auth: 'OPERATOR', description: 'Deploy target Kubernetes cluster' },
+    { category: 'METAL3', method: 'POST', path: '/api/v1/metal3/clusters/:id/scale', auth: 'OPERATOR', description: 'AI Agent elastic scale-up' },
+    { category: 'METAL3', method: 'POST', path: '/api/v1/metal3/clusters/:id/scale-down-node', auth: 'OPERATOR', description: 'AI Agent graceful drain & scale-down' },
+    { category: 'METAL3', method: 'POST', path: '/api/v1/metal3/clusters/:id/upgrade', auth: 'OPERATOR', description: 'Rolling zero-downtime version upgrade' },
+    { category: 'METAL3', method: 'GET', path: '/api/v1/metal3/alerts', auth: 'BEARER', description: 'List active baremetal host alerts' },
+    { category: 'METAL3', method: 'POST', path: '/api/v1/metal3/alerts/simulate', auth: 'OPERATOR', description: 'Inject simulated hardware failure drill' },
+    { category: 'METAL3', method: 'POST', path: '/api/v1/metal3/alerts/:id/remediate', auth: 'OPERATOR', description: 'Trigger AI Agent autonomous out-of-band self-healing' },
+    { category: 'METAL3', method: 'POST', path: '/api/v1/metal3/alerts/:id/dispatch', auth: 'OPERATOR', description: 'Dispatch signed alert to Feishu/WeCom/DingTalk' },
+    { category: 'METAL3', method: 'POST', path: '/api/v1/metal3/alerts/:id/dismiss', auth: 'OPERATOR', description: 'Dismiss/resolve proactive alert' },
+
+    // Plugins & Tools
+    { category: 'PLUGINS', method: 'GET', path: '/api/v1/plugins', auth: 'BEARER', description: 'List all registered plugins' },
+    { category: 'PLUGINS', method: 'GET', path: '/api/v1/plugins/presets', auth: 'BEARER', description: 'Get templates for WeChat, QQ, Meituan, 12306, Flights, Alipay' },
+    { category: 'PLUGINS', method: 'POST', path: '/api/v1/plugins/create', auth: 'CONNECTOR_ADMIN', description: 'Dynamically register custom connector' },
+    { category: 'PLUGINS', method: 'DELETE', path: '/api/v1/plugins/:id', auth: 'CONNECTOR_ADMIN', description: 'Delete custom connector' },
+    { category: 'PLUGINS', method: 'POST', path: '/api/v1/plugins/:id/toggle', auth: 'PLATFORM_ADMIN', description: 'Toggle plugin kill switch' },
+    { category: 'PLUGINS', method: 'POST', path: '/api/v1/tools/:id/test', auth: 'BEARER', description: 'Execute tool in process-isolated sandbox' },
+
+    // Audits
+    { category: 'AUDIT', method: 'GET', path: '/api/v1/audits', auth: 'AUDITOR', description: 'Query immutable security audit events' },
+    { category: 'AUDIT', method: 'GET', path: '/api/v1/metrics', auth: 'BEARER', description: 'Get live platform throughput & token metrics' },
+  ];
+
+  res.json({ success: true, count: routes.length, data: routes });
+});
+
+// System Raw SQL Schema Endpoint
+apiRouter.get('/system/sql-schema', (_req: Request, res: Response) => {
+  try {
+    const schemaPath = path.resolve(process.cwd(), 'src/server/schema.sql');
+    if (fs.existsSync(schemaPath)) {
+      const sqlContent = fs.readFileSync(schemaPath, 'utf8');
+      return res.json({ success: true, sql: sqlContent, filename: 'schema.sql' });
+    }
+    res.json({ success: false, error: 'schema.sql not found on disk' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// System Multi-Language Backend Alternatives
+apiRouter.get('/system/backend-alternatives', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: [
+      {
+        id: 'go',
+        name: 'Golang (Go 1.22+)',
+        runtime: 'Go Standard net/http / Gin Web Framework',
+        ecosystem_fit: 'Kubernetes Operators, Metal3 Ironic, Cloud-Native, High Concurrency',
+        characteristics: [
+          'Direct client-go & controller-runtime compatibility',
+          'Single static binary distribution (< 20MB scratch image)',
+          'Native Goroutines concurrency for millions of parallel bare metal probes',
+          'Zero garbage collection pause spikes in high-throughput clusters',
+        ],
+        docker_image: 'golang:1.22-alpine -> scratch',
+        run_command: 'cd backend-go && go run main.go',
+        test_command: 'cd backend-go && go test -v ./...',
+        source_file: 'backend-go/main.go',
+        docker_file: 'backend-go/Dockerfile',
+        default_port: 8080,
+      },
+      {
+        id: 'python',
+        name: 'Python (3.12+)',
+        runtime: 'FastAPI + Pydantic v2 + Uvicorn ASGI',
+        ecosystem_fit: 'AI Agents, LangChain, LlamaIndex, PyTorch, Data Science',
+        characteristics: [
+          'Native integration with Python AI agent toolchains (LangChain/CrewAI/AutoGen)',
+          'Pydantic v2 high-speed Rust-core JSON validation and OpenAPI docs',
+          'AsyncIO non-blocking event loop for streaming LLM tokens',
+          'Rich scientific, mathematical, and data analysis packages ecosystem',
+        ],
+        docker_image: 'python:3.12-slim',
+        run_command: 'cd backend-python && uvicorn main:app --port 8000 --reload',
+        test_command: 'pytest backend-python/',
+        source_file: 'backend-python/main.py',
+        docker_file: 'backend-python/Dockerfile',
+        default_port: 8000,
+      },
+      {
+        id: 'node',
+        name: 'Node.js (v22 LTS)',
+        runtime: 'Express 4.x + TypeScript + In-Memory WAL',
+        ecosystem_fit: 'Fullstack Studio Control Plane, Universal TS Contracts, Rapid Prototyping',
+        characteristics: [
+          'Shared TypeScript domain types between frontend and backend contracts',
+          'High I/O asynchronous throughput for RESTful & WebSocket events',
+          'Deterministic fake providers for safe zero-external-side-effect testing',
+          'Integrated Vite middleware gateway on port 3000',
+        ],
+        docker_image: 'node:22-alpine',
+        run_command: 'npm run dev:backend',
+        test_command: 'npm test',
+        source_file: 'server.ts / src/server/api.ts',
+        docker_file: 'Dockerfile',
+        default_port: 3000,
+      },
+    ],
+  });
+});
+
+// System Backend Source Code Retrieval
+apiRouter.get('/system/backend-code', (req: Request, res: Response) => {
+  const lang = (req.query.lang as string) || 'go';
+  try {
+    let filePath = '';
+    let fileName = '';
+    if (lang === 'go') {
+      filePath = path.resolve(process.cwd(), 'backend-go/main.go');
+      fileName = 'main.go';
+    } else if (lang === 'python') {
+      filePath = path.resolve(process.cwd(), 'backend-python/main.py');
+      fileName = 'main.py';
+    } else if (lang === 'go-docker') {
+      filePath = path.resolve(process.cwd(), 'backend-go/Dockerfile');
+      fileName = 'Dockerfile';
+    } else if (lang === 'python-docker') {
+      filePath = path.resolve(process.cwd(), 'backend-python/Dockerfile');
+      fileName = 'Dockerfile';
+    } else {
+      filePath = path.resolve(process.cwd(), 'server.ts');
+      fileName = 'server.ts';
+    }
+
+    if (fs.existsSync(filePath)) {
+      const code = fs.readFileSync(filePath, 'utf8');
+      return res.json({ success: true, lang, filename: fileName, code });
+    }
+    res.status(404).json({ success: false, error: `File not found: ${filePath}` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 
 // 3. Organization & Identity
 apiRouter.get('/principals/me', (req: Request, res: Response) => {
@@ -1477,4 +1759,5 @@ apiRouter.post('/metal3/alerts/:id/dismiss', (req: Request, res: Response) => {
   const ok = globalMetal3Engine.dismissAlert(id);
   res.json({ success: ok, data: { alert_id: id, dismissed: ok } });
 });
+
 

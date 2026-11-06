@@ -81,7 +81,30 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const [refreshing, setRefreshing] = useState<boolean>(false);
 
   // Active Main SubTab
-  const [activeSubTab, setActiveSubTab] = useState<'dashboard' | 'terminal' | 'cluster' | 'fleet' | 'ephnode'>('dashboard');
+  const [activeSubTab, setActiveSubTab] = useState<'dashboard' | 'dualagent' | 'multicni' | 'omni' | 'terminal' | 'cluster' | 'fleet' | 'ephnode'>('dashboard');
+
+  // Dual-Agent Orchestration State
+  const [dualAgent, setDualAgent] = useState<any>(null);
+  const [triggeringDualRun, setTriggeringDualRun] = useState<boolean>(false);
+  const [syncingHeartbeats, setSyncingHeartbeats] = useState<boolean>(false);
+  const [pivotingHandover, setPivotingHandover] = useState<boolean>(false);
+
+  // Dual-Network & Multi-CNI Coexistence State
+  const [dualNetwork, setDualNetwork] = useState<any>(null);
+  const [multiCNI, setMultiCNI] = useState<any>(null);
+  const [cniTestResults, setCniTestResults] = useState<any>(null);
+  const [testingCNI, setTestingCNI] = useState<boolean>(false);
+
+  // Talos Omni Rapid Deployment State
+  const [omniProgress, setOmniProgress] = useState<any>(null);
+  const [omniDeploying, setOmniDeploying] = useState<boolean>(false);
+  const [omniClusterName, setOmniClusterName] = useState<string>('ai-superpod-h100-omni');
+  const [omniK8sVersion, setOmniK8sVersion] = useState<string>('v1.31.2');
+  const [omniControlPlanes, setOmniControlPlanes] = useState<number>(3);
+  const [omniGPUWorkers, setOmniGPUWorkers] = useState<number>(8);
+  const [omniManifests, setOmniManifests] = useState<Record<string, string>>({});
+  const [activeManifestKey, setActiveManifestKey] = useState<string>('01-cluster-metal3-capi.yaml');
+  const [copiedManifest, setCopiedManifest] = useState<boolean>(false);
 
   // Terminal & Live Logs State
   const [activeStream, setActiveStream] = useState<LogStreamType | 'all'>('all');
@@ -142,13 +165,18 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const fetchMetal3Data = async () => {
     try {
       setRefreshing(true);
-      const [ephRes, bmhRes, clRes, logsRes, agentRes, alertsRes] = await Promise.all([
+      const [ephRes, bmhRes, clRes, logsRes, agentRes, alertsRes, daRes, netRes, cniRes, omniRes, manRes] = await Promise.all([
         fetch('/api/v1/metal3/eph-node').then(r => r.json()).catch(() => null),
         fetch('/api/v1/metal3/bmh').then(r => r.json()).catch(() => null),
         fetch('/api/v1/metal3/clusters').then(r => r.json()).catch(() => null),
         fetch('/api/v1/metal3/logs').then(r => r.json()).catch(() => null),
         fetch('/api/v1/metal3/agent/status').then(r => r.json()).catch(() => null),
         fetch('/api/v1/metal3/alerts').then(r => r.json()).catch(() => null),
+        fetch('/api/v1/metal3/dual-agent/status').then(r => r.json()).catch(() => null),
+        fetch('/api/v1/metal3/network/spec').then(r => r.json()).catch(() => null),
+        fetch('/api/v1/metal3/cni/spec').then(r => r.json()).catch(() => null),
+        fetch('/api/v1/metal3/omni/status').then(r => r.json()).catch(() => null),
+        fetch('/api/v1/metal3/omni/manifests').then(r => r.json()).catch(() => null),
       ]);
 
       if (ephRes?.data) setEphNode(ephRes.data);
@@ -169,6 +197,15 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
       if (logsRes?.data) setLogs(logsRes.data);
       if (agentRes?.data) setAgentTelemetry(agentRes.data);
       if (alertsRes?.data) setAlerts(alertsRes.data);
+      if (daRes?.data) setDualAgent(daRes.data);
+      if (netRes?.data) setDualNetwork(netRes.data);
+      if (cniRes?.data) setMultiCNI(cniRes.data);
+      if (omniRes?.data) setOmniProgress(omniRes.data);
+      if (manRes?.manifests) {
+        setOmniManifests(manRes.manifests);
+        const keys = Object.keys(manRes.manifests);
+        if (keys.length > 0 && !activeManifestKey) setActiveManifestKey(keys[0]);
+      }
     } catch (err) {
       console.error('Failed to fetch metal3 data:', err);
     } finally {
@@ -255,6 +292,103 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
     } catch (err) {
       console.error('Dismiss alert failed:', err);
     }
+  };
+
+  // Dual-Agent Orchestration Actions
+  const handleTriggerDualRun = async (phase?: string) => {
+    try {
+      setTriggeringDualRun(true);
+      const res = await fetch('/api/v1/metal3/dual-agent/trigger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phase: phase || 'MULTI_CNI_CONVERGE' }),
+      }).then(r => r.json());
+      if (res?.data) {
+        setDualAgent(res.data);
+      }
+    } catch (err) {
+      console.error('Trigger dual-agent run failed:', err);
+    } finally {
+      setTriggeringDualRun(false);
+    }
+  };
+
+  const handleSyncHeartbeats = async () => {
+    try {
+      setSyncingHeartbeats(true);
+      const res = await fetch('/api/v1/metal3/dual-agent/sync', { method: 'POST' }).then(r => r.json());
+      if (res?.data) setDualAgent(res.data);
+    } catch (err) {
+      console.error('Sync heartbeats failed:', err);
+    } finally {
+      setSyncingHeartbeats(false);
+    }
+  };
+
+  const handlePivotHandover = async () => {
+    try {
+      setPivotingHandover(true);
+      const res = await fetch('/api/v1/metal3/dual-agent/pivot', { method: 'POST' }).then(r => r.json());
+      if (res?.data) setDualAgent(res.data);
+    } catch (err) {
+      console.error('Pivot handover failed:', err);
+    } finally {
+      setPivotingHandover(false);
+    }
+  };
+
+  // Multi-CNI Packet Flow Benchmark
+  const handleTestCNIPackets = async () => {
+    try {
+      setTestingCNI(true);
+      const res = await fetch('/api/v1/metal3/cni/test', { method: 'POST' }).then(r => r.json());
+      if (res?.results) {
+        setCniTestResults(res.results);
+      }
+    } catch (err) {
+      console.error('Test CNI failed:', err);
+    } finally {
+      setTestingCNI(false);
+    }
+  };
+
+  // Talos Omni Rapid BareMetal Deploy
+  const handleInstantOmniDeploy = async () => {
+    try {
+      setOmniDeploying(true);
+      const hostNames = hosts.slice(0, 11).map(h => h.name);
+      const res = await fetch('/api/v1/metal3/omni/deploy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster_name: omniClusterName,
+          k8s_version: omniK8sVersion,
+          control_plane_nodes: omniControlPlanes,
+          worker_gpu_nodes: omniGPUWorkers,
+          selected_host_names: hostNames,
+          enable_dual_network: true,
+          enable_multi_cni: true,
+          auto_pivot: true,
+        }),
+      }).then(r => r.json());
+      if (res?.data) {
+        setOmniProgress(res.data);
+        if (res.data.manifests) {
+          setOmniManifests(res.data.manifests);
+        }
+      }
+      await fetchMetal3Data();
+    } catch (err) {
+      console.error('Omni deploy failed:', err);
+    } finally {
+      setOmniDeploying(false);
+    }
+  };
+
+  const handleCopyManifest = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedManifest(true);
+    setTimeout(() => setCopiedManifest(false), 2000);
   };
 
   useEffect(() => {
@@ -925,7 +1059,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
 
       {/* Main Navigation Sub-Tabs */}
       <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-2">
-        {/* Tab 1: Node Dashboard (Dedicated view for individual nodes) */}
+        {/* Tab 1: Node Dashboard */}
         <button
           onClick={() => setActiveSubTab('dashboard')}
           className={`px-3.5 py-2 text-xs font-semibold rounded-lg flex items-center gap-2 transition cursor-pointer ${
@@ -941,20 +1075,51 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
           </span>
         </button>
 
-        {/* Tab 2: Terminal & Multi-Stream Output (Agent logs, K8s install, Ironic redirect) */}
+        {/* Tab: Dual-Agent Orchestration (Agent 1 Eph-Node & Agent 2 Target Cluster) */}
         <button
-          onClick={() => setActiveSubTab('terminal')}
+          onClick={() => setActiveSubTab('dualagent')}
           className={`px-3.5 py-2 text-xs font-semibold rounded-lg flex items-center gap-2 transition cursor-pointer ${
-            activeSubTab === 'terminal'
-              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+            activeSubTab === 'dualagent'
+              ? 'bg-gradient-to-r from-cyan-600 to-indigo-600 text-white shadow-md shadow-indigo-600/30'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
           }`}
         >
-          <Terminal className="w-4 h-4" />
-          <span>{t.tabTerminalLogs}</span>
-          <span className="px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            Live Stream
+          <Layers className="w-4 h-4 text-cyan-300" />
+          <span>{t.tabMetal3DualAgent}</span>
+          <span className="px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-800 text-cyan-300 text-[10px] font-mono font-bold">
+            Eph ⇄ Target
+          </span>
+        </button>
+
+        {/* Tab: Dual-Network & Multi-CNI Coexistence (Multus + Calico + OVS + SR-IOV) */}
+        <button
+          onClick={() => setActiveSubTab('multicni')}
+          className={`px-3.5 py-2 text-xs font-semibold rounded-lg flex items-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'multicni'
+              ? 'bg-gradient-to-r from-emerald-600 to-cyan-600 text-white shadow-md shadow-cyan-600/30'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          <Network className="w-4 h-4 text-emerald-300" />
+          <span>{t.tabMetal3MultiCNI}</span>
+          <span className="px-1.5 py-0.2 rounded bg-emerald-950 border border-emerald-800 text-emerald-300 text-[10px] font-mono font-bold">
+            4-CNI Mesh
+          </span>
+        </button>
+
+        {/* Tab: Talos Omni-Style Rapid Deployment Wizard */}
+        <button
+          onClick={() => setActiveSubTab('omni')}
+          className={`px-3.5 py-2 text-xs font-semibold rounded-lg flex items-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'omni'
+              ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-md shadow-orange-600/30'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          <Zap className="w-4 h-4 text-amber-300" />
+          <span>{t.tabMetal3Omni}</span>
+          <span className="px-1.5 py-0.2 rounded bg-amber-950 border border-amber-800 text-amber-300 text-[10px] font-mono font-bold">
+            120s Omni
           </span>
         </button>
 
@@ -968,7 +1133,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
           }`}
         >
           <Boxes className="w-4 h-4" />
-          <span>{language === 'zh' ? '目标集群部署流水线' : 'Target K8s Pipeline'}</span>
+          <span>{language === 'zh' ? '目标集群流水线' : 'Target K8s Pipeline'}</span>
           {activeCluster && (
             <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 text-[10px] font-mono">
               {activeCluster.scale.total_nodes} Nodes
@@ -1000,6 +1165,23 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
         >
           <Cpu className="w-4 h-4" />
           <span>{language === 'zh' ? '引导节点 (eph-node) 架构' : 'Eph-Node Architecture'}</span>
+        </button>
+
+        {/* Tab 2: Terminal & Multi-Stream Output */}
+        <button
+          onClick={() => setActiveSubTab('terminal')}
+          className={`px-3.5 py-2 text-xs font-semibold rounded-lg flex items-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'terminal'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          <Terminal className="w-4 h-4" />
+          <span>{t.tabTerminalLogs}</span>
+          <span className="px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            Live Stream
+          </span>
         </button>
       </div>
 
@@ -2283,6 +2465,764 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* --- SUBTAB: DUAL-AGENT ORCHESTRATION HUB (EPH-NODE & TARGET CLUSTER) --- */}
+      {/* ========================================================================= */}
+      {activeSubTab === 'dualagent' && (
+        <div className="space-y-6">
+          {/* Top Banner */}
+          <div className="bg-gradient-to-r from-slate-900 via-cyan-950/40 to-indigo-950/40 border border-cyan-800/60 rounded-2xl p-6 relative overflow-hidden shadow-xl">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2 mb-2">
+                  <span className="px-2.5 py-0.5 rounded bg-cyan-950 border border-cyan-600 text-cyan-300 text-[10px] font-mono font-bold flex items-center gap-1.5 shadow-sm">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                    METAL3 DUAL-AGENT CONTROLLER ACTIVE
+                  </span>
+                  <span className="text-slate-500 text-xs">|</span>
+                  <span className="px-2 py-0.5 rounded bg-indigo-950 border border-indigo-700 text-indigo-300 text-[10px] font-mono">
+                    Phase: {dualAgent?.current_phase || 'CLUSTER_HEALTHY'}
+                  </span>
+                  <span className="text-slate-500 text-xs">|</span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-700 text-emerald-300 text-[10px] font-mono font-bold">
+                    Pivot: {dualAgent?.pivot_status || 'SELF_HOSTED'}
+                  </span>
+                </div>
+                <h2 className="text-xl font-bold text-white tracking-tight">{t.dualAgentTitle}</h2>
+                <p className="text-xs text-slate-300 max-w-3xl mt-1 leading-relaxed">{t.dualAgentSubtitle}</p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <button
+                  onClick={() => handleTriggerDualRun()}
+                  disabled={triggeringDualRun}
+                  className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-cyan-600/30 transition cursor-pointer"
+                >
+                  <Play className={`w-3.5 h-3.5 ${triggeringDualRun ? 'animate-spin' : ''}`} />
+                  <span>{triggeringDualRun ? '...' : t.btnTriggerDualRun}</span>
+                </button>
+                <button
+                  onClick={handleSyncHeartbeats}
+                  disabled={syncingHeartbeats}
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${syncingHeartbeats ? 'animate-spin text-cyan-400' : ''}`} />
+                  <span>{t.btnSyncHeartbeats}</span>
+                </button>
+                <button
+                  onClick={handlePivotHandover}
+                  disabled={pivotingHandover}
+                  className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition cursor-pointer"
+                >
+                  <RotateCw className={`w-3.5 h-3.5 ${pivotingHandover ? 'animate-spin' : ''}`} />
+                  <span>{pivotingHandover ? '...' : t.btnPivotHandover}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Side-by-Side Dual Agent Topology Cards */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Agent 1: Eph-Node Bootstrap Agent */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 relative overflow-hidden shadow-lg space-y-4">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-cyan-950 border border-cyan-800 text-cyan-400">
+                    <Cpu className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-white font-mono">
+                        {dualAgent?.bootstrap_agent?.name || 'Eph-Node Bootstrap Controller Agent'}
+                      </span>
+                      <span className="px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-700 text-cyan-300 text-[10px] font-mono">
+                        Agent 1 (Bootstrap)
+                      </span>
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      {dualAgent?.bootstrap_agent?.location || 'eph-bootstrap-node-01 (Minikube / Kind)'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-xs font-mono font-bold text-emerald-400">ACTIVE</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] text-slate-400 block mb-1">
+                    {language === 'zh' ? 'Ironic 装机引擎状态' : 'Ironic Conductor Engine'}
+                  </span>
+                  <span className="text-emerald-400 font-bold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    {dualAgent?.bootstrap_agent?.metrics?.ironic_state || 'HEALTHY (Port 6385)'}
+                  </span>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] text-slate-400 block mb-1">
+                    {language === 'zh' ? 'Dnsmasq TFTP 租约' : 'PXE DHCP Leases'}
+                  </span>
+                  <span className="text-cyan-300 font-bold">
+                    {dualAgent?.bootstrap_agent?.metrics?.dhcp_leases_active ?? 15} Hosts Assigned
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <span className="text-xs font-semibold text-slate-300 block mb-2">
+                  {language === 'zh' ? '正在执行的自主装机任务:' : 'Active Autonomous Provisioning Tasks:'}
+                </span>
+                <div className="space-y-1.5 text-xs text-slate-300 font-mono">
+                  {(dualAgent?.bootstrap_agent?.active_tasks || [
+                    'Ironic Conductor Watchdog',
+                    'Dnsmasq TFTP Lease Monitor',
+                    'BareMetalHost Inventory Inspection',
+                    'Target CP01 VirtualMedia Staging',
+                  ]).map((task: string, idx: number) => (
+                    <div key={idx} className="flex items-center gap-2 p-2 rounded-lg bg-slate-950/70 border border-slate-800/80">
+                      <Check className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      <span>{task}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                <span>Pod: {dualAgent?.bootstrap_agent?.pod_name || 'metal3-eph-agent-daemon-7b89f4'}</span>
+                <span>Namespace: {dualAgent?.bootstrap_agent?.namespace || 'metal3-system'}</span>
+              </div>
+            </div>
+
+            {/* Agent 2: Target Cluster Lifecycle Agent */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 relative overflow-hidden shadow-lg space-y-4">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-indigo-950 border border-indigo-800 text-indigo-400">
+                    <Boxes className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold text-white font-mono">
+                        {dualAgent?.target_agent?.name || 'Target Cluster Lifecycle & Convergence Agent'}
+                      </span>
+                      <span className="px-1.5 py-0.2 rounded bg-indigo-950 border border-indigo-700 text-indigo-300 text-[10px] font-mono">
+                        Agent 2 (Target)
+                      </span>
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      {dualAgent?.target_agent?.location || 'cluster-prod-gpu-k8s (Target Production K8s)'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-xs font-mono font-bold text-emerald-400">ACTIVE</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] text-slate-400 block mb-1">
+                    {language === 'zh' ? 'CAPI 节点健康托管' : 'CAPI Machines Healthy'}
+                  </span>
+                  <span className="text-emerald-400 font-bold flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    {dualAgent?.target_agent?.metrics?.capi_machines_healthy ?? 10} / 10 Nodes Ready
+                  </span>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] text-slate-400 block mb-1">
+                    {language === 'zh' ? 'etcd 3 节点法定仲裁' : 'etcd Quorum Status'}
+                  </span>
+                  <span className="text-cyan-300 font-bold">
+                    {dualAgent?.target_agent?.metrics?.etcd_quorum_status || 'HEALTHY_3_MEMBERS'}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <span className="text-xs font-semibold text-slate-300 block mb-2">
+                  {language === 'zh' ? '目标集群生命周期管控与自愈:' : 'Target Cluster Lifecycle & Self-Healing:'}
+                </span>
+                <div className="space-y-1.5 text-xs text-slate-300 font-mono">
+                  {(dualAgent?.target_agent?.active_tasks || [
+                    'CAPI MachinePool Reconciler',
+                    'Pivot CRD Custodian',
+                    'Multus/OVS/Calico/SRIOV Mesh Orchestrator',
+                    'Worker Auto-Join Barrier',
+                  ]).map((task: string, idx: number) => (
+                    <div key={idx} className="flex items-center gap-2 p-2 rounded-lg bg-slate-950/70 border border-slate-800/80">
+                      <Check className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                      <span>{task}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                <span>Pod: {dualAgent?.target_agent?.pod_name || 'capm3-target-agent-operator-9c41a2'}</span>
+                <span>Namespace: {dualAgent?.target_agent?.namespace || 'capi-system'}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Dual-Agent Pipeline Stepper */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-4">
+            <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+              <Activity className="w-4 h-4 text-cyan-400" />
+              <span>
+                {language === 'zh'
+                  ? '双 Agent 协同自举与 Pivot 移交全流程状态流水线'
+                  : 'Dual-Agent Coordination & Pivot Handover Pipeline'}
+              </span>
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-7 gap-2.5 pt-2">
+              {[
+                { id: 'EPH_BOOTSTRAP', name: '1. Eph-Node Boot', zh: '1. Eph-Node 引导', agent: 'Agent 1' },
+                { id: 'BMH_INSPECTION', name: '2. BMH Inspect', zh: '2. 带外巡检', agent: 'Agent 1' },
+                { id: 'TARGET_CP_PROVISION', name: '3. VirtualMedia CP', zh: '3. Master01 镜像', agent: 'Agent 1' },
+                { id: 'K8S_INITIALIZATION', name: '4. Target K8s Init', zh: '4. 目标控制面', agent: 'Agent 2' },
+                { id: 'PIVOT_TRANSFER', name: '5. Pivot Handover', zh: '5. Pivot 移交', agent: 'Dual' },
+                { id: 'MULTI_CNI_CONVERGE', name: '6. Multi-CNI Mesh', zh: '6. 多 CNI 点火', agent: 'Agent 2' },
+                { id: 'CLUSTER_HEALTHY', name: '7. Fleet Ready', zh: '7. 全机群就绪', agent: 'Self-Hosted' },
+              ].map((step, idx) => {
+                const isCurrent = dualAgent?.current_phase === step.id;
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => handleTriggerDualRun(step.id)}
+                    className={`p-3 rounded-xl border transition cursor-pointer flex flex-col justify-between ${
+                      isCurrent
+                        ? 'bg-cyan-950/60 border-cyan-500 shadow-md shadow-cyan-500/20 ring-1 ring-cyan-500'
+                        : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1">
+                        <span>{step.agent}</span>
+                        {isCurrent && <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />}
+                      </div>
+                      <div className="text-xs font-bold text-white">
+                        {language === 'zh' ? step.zh : step.name}
+                      </div>
+                    </div>
+                    <div className="mt-2 text-[10px] text-cyan-300 font-mono flex items-center gap-1">
+                      <Check className="w-3 h-3" />
+                      <span>{language === 'zh' ? '点击推进' : 'Advance'}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Unified Forensic Event Stream */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-4">
+            <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+              <Terminal className="w-4 h-4 text-emerald-400" />
+              <span>
+                {language === 'zh'
+                  ? '双 Agent 协同审计事件与状态机日志流'
+                  : 'Dual-Agent Coordinated Event Audit Log Stream'}
+              </span>
+            </h3>
+
+            <div className="space-y-2">
+              {(dualAgent?.events || []).map((evt: any) => (
+                <div
+                  key={evt.id}
+                  className="p-3 rounded-xl bg-slate-950 border border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-2 text-xs font-mono"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        evt.source === 'EPH_AGENT'
+                          ? 'bg-cyan-950 text-cyan-300 border border-cyan-800'
+                          : evt.source === 'TARGET_AGENT'
+                          ? 'bg-indigo-950 text-indigo-300 border border-indigo-800'
+                          : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                      }`}
+                    >
+                      {evt.source}
+                    </span>
+                    <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 text-[10px]">
+                      {evt.phase}
+                    </span>
+                    <span className="text-slate-200">
+                      {language === 'zh' && evt.message_zh ? evt.message_zh : evt.message}
+                    </span>
+                  </div>
+
+                  <span className="text-slate-500 text-[11px] shrink-0">
+                    {new Date(evt.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* --- SUBTAB: DUAL-NETWORK & MULTI-CNI COEXISTENCE (MULTUS/CALICO/OVS/SR-IOV) --- */}
+      {/* ========================================================================= */}
+      {activeSubTab === 'multicni' && (
+        <div className="space-y-6">
+          {/* Top Banner */}
+          <div className="bg-gradient-to-r from-slate-900 via-emerald-950/40 to-slate-900 border border-emerald-800/60 rounded-2xl p-6 relative overflow-hidden shadow-xl">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2 mb-2">
+                  <span className="px-2.5 py-0.5 rounded bg-emerald-950 border border-emerald-600 text-emerald-300 text-[10px] font-mono font-bold flex items-center gap-1.5 shadow-sm">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    DUAL-NETWORK & MULTI-CNI MESH OPERATIONAL
+                  </span>
+                  <span className="text-slate-500 text-xs">|</span>
+                  <span className="text-xs text-emerald-300 font-mono">
+                    Multus v4.1 + Calico v3.28 + OVS v2.17 + SR-IOV v1.4
+                  </span>
+                </div>
+                <h2 className="text-xl font-bold text-white tracking-tight">{t.multiCNITitle}</h2>
+                <p className="text-xs text-slate-300 max-w-3xl mt-1 leading-relaxed">{t.multiCNISubtitle}</p>
+              </div>
+
+              <div className="flex items-center gap-2.5 shrink-0">
+                <button
+                  onClick={handleTestCNIPackets}
+                  disabled={testingCNI}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-2 shadow-md shadow-emerald-600/30 transition cursor-pointer"
+                >
+                  <Zap className={`w-4 h-4 ${testingCNI ? 'animate-spin' : ''}`} />
+                  <span>{testingCNI ? 'Testing Packets...' : t.btnTestCNIPackets}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Dual Physical Network Breakdown */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* 1. Control Network Card */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-4">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-indigo-950 border border-indigo-800 text-indigo-400">
+                    <Radio className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">
+                      {dualNetwork?.control_network?.purpose_zh && language === 'zh'
+                        ? '管理与控制平面专网 (Control Network)'
+                        : 'Control-Plane Management Network'}
+                    </h3>
+                    <span className="text-xs text-slate-400 font-mono">
+                      VLAN {dualNetwork?.control_network?.vlan || 100} • MTU {dualNetwork?.control_network?.mtu || 1500}
+                    </span>
+                  </div>
+                </div>
+
+                <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 text-xs font-mono font-bold">
+                  ONLINE
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] text-slate-400 block mb-1">Subnet CIDR</span>
+                  <span className="text-indigo-300 font-bold">{dualNetwork?.control_network?.cidr || '10.240.10.0/24'}</span>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] text-slate-400 block mb-1">Gateway</span>
+                  <span className="text-white font-bold">{dualNetwork?.control_network?.gateway || '10.240.10.1'}</span>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
+                {language === 'zh'
+                  ? dualNetwork?.control_network?.purpose_zh ||
+                    '管理控制面专网：承载 Kube-apiserver、etcd 仲裁、Ironic 裸机装机 PXE/DHCP/VirtualMedia 镜像注入与 BMC 带外控制。'
+                  : dualNetwork?.control_network?.purpose}
+              </p>
+
+              <div className="pt-2 text-[11px] text-slate-400 font-mono flex items-center justify-between">
+                <span>Interfaces: {(dualNetwork?.control_network?.interfaces || ['eno1', 'eno2']).join(', ')}</span>
+                <span className="text-indigo-400">{dualNetwork?.control_network?.bandwidth || '2x 10Gbps Bonded'}</span>
+              </div>
+            </div>
+
+            {/* 2. Data Network Card */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-4">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-cyan-950 border border-cyan-800 text-cyan-400">
+                    <Zap className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">
+                      {dualNetwork?.data_network?.purpose_zh && language === 'zh'
+                        ? '超高速业务数据专网 (Data Network)'
+                        : 'High-Throughput Data Network'}
+                    </h3>
+                    <span className="text-xs text-slate-400 font-mono">
+                      VLAN {dualNetwork?.data_network?.vlan || 200} • MTU {dualNetwork?.data_network?.mtu || 9000} (Jumbo)
+                    </span>
+                  </div>
+                </div>
+
+                <span className="px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800 text-xs font-mono font-bold">
+                  200G RoCEv2
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] text-slate-400 block mb-1">Subnet CIDR</span>
+                  <span className="text-cyan-300 font-bold">{dualNetwork?.data_network?.cidr || '10.250.0.0/16'}</span>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-[10px] text-slate-400 block mb-1">Gateway</span>
+                  <span className="text-white font-bold">{dualNetwork?.data_network?.gateway || '10.250.0.1'}</span>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed bg-slate-950/60 p-3 rounded-xl border border-slate-800/80">
+                {language === 'zh'
+                  ? dualNetwork?.data_network?.purpose_zh ||
+                    '超高速数据专网：承载 Pod 东西向流量、GPU Direct RDMA、NCCL 分布式并行训练、超高带宽微秒级超低时延。'
+                  : dualNetwork?.data_network?.purpose}
+              </p>
+
+              <div className="pt-2 text-[11px] text-slate-400 font-mono flex items-center justify-between">
+                <span>Interfaces: {(dualNetwork?.data_network?.interfaces || ['ens1f0', 'ens1f1']).join(', ')}</span>
+                <span className="text-cyan-400">{dualNetwork?.data_network?.bandwidth || '2x 200Gbps Dual-Port RoCEv2'}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 4-CNI Coexistence Architecture Matrix */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+                <Network className="w-4 h-4 text-emerald-400" />
+                <span>
+                  {language === 'zh'
+                    ? '4 种 CNI 融合协同工作矩阵 (Multus + Calico + OVS + SR-IOV)'
+                    : '4-CNI Coexistence Operational Matrix'}
+                </span>
+              </h3>
+              <span className="text-xs text-slate-400 font-mono">All 4 Running Simultaneously</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
+              {/* 1. Multus */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="text-xs font-bold font-mono text-purple-300 px-2 py-0.5 rounded bg-purple-950 border border-purple-800">
+                      MULTUS CNI
+                    </span>
+                    <span className="text-[10px] font-mono text-emerald-400">ACTIVE</span>
+                  </div>
+                  <div className="text-xs font-bold text-white">Meta-Plugin Multi-NIC</div>
+                  <div className="text-[11px] text-slate-400 mt-1">
+                    {language === 'zh'
+                      ? '多网卡附着驱动，向每个 Pod 同时挂载主网卡与附加加速网卡'
+                      : 'Meta-plugin attaching multiple NIC interfaces to single Pod container'}
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-slate-800/80 text-[11px] font-mono text-slate-400">
+                  <div>Dispatch: &lt; 0.1µs</div>
+                  <div className="text-purple-300">CRD: NetworkAttachmentDefinition</div>
+                </div>
+              </div>
+
+              {/* 2. Calico */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="text-xs font-bold font-mono text-indigo-300 px-2 py-0.5 rounded bg-indigo-950 border border-indigo-800">
+                      CALICO CNI
+                    </span>
+                    <span className="text-[10px] font-mono text-emerald-400">eth0 (Default)</span>
+                  </div>
+                  <div className="text-xs font-bold text-white">Default Primary Network</div>
+                  <div className="text-[11px] text-slate-400 mt-1">
+                    {language === 'zh'
+                      ? '默认主网络接口，处理 Pod-to-Pod 路由、BGP 对等与 NetworkPolicy'
+                      : 'Default primary interface, handling BGP routing, Services, & NetworkPolicy'}
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-slate-800/80 text-[11px] font-mono text-slate-400">
+                  <div>Latency: ~12µs</div>
+                  <div className="text-indigo-300">BGP Peering: 4/4 Connected</div>
+                </div>
+              </div>
+
+              {/* 3. OVS */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="text-xs font-bold font-mono text-cyan-300 px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800">
+                      OVS CNI
+                    </span>
+                    <span className="text-[10px] font-mono text-cyan-400">net1 (br-data)</span>
+                  </div>
+                  <div className="text-xs font-bold text-white">Open vSwitch L2 Bridge</div>
+                  <div className="text-[11px] text-slate-400 mt-1">
+                    {language === 'zh'
+                      ? '二层虚拟交换网桥，支持动态 802.1Q VLAN 隔离与高速二层广播域'
+                      : 'Layer 2 virtual switching bridge with dynamic VLAN trunking and isolation'}
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-slate-800/80 text-[11px] font-mono text-slate-400">
+                  <div>Latency: ~8µs</div>
+                  <div className="text-cyan-300">Throughput: 98.4 Gbps</div>
+                </div>
+              </div>
+
+              {/* 4. SR-IOV */}
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="text-xs font-bold font-mono text-amber-300 px-2 py-0.5 rounded bg-amber-950 border border-amber-800">
+                      SR-IOV CNI
+                    </span>
+                    <span className="text-[10px] font-mono text-amber-400">net2 (Direct VF)</span>
+                  </div>
+                  <div className="text-xs font-bold text-white">Hardware VF + GPU RDMA</div>
+                  <div className="text-[11px] text-slate-400 mt-1">
+                    {language === 'zh'
+                      ? '物理网卡 Virtual Function 直通，GPU Direct RDMA 零内核拷贝'
+                      : 'Mellanox ConnectX VF passthrough, kernel bypass, GPU Direct RDMA'}
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-slate-800/80 text-[11px] font-mono text-slate-400">
+                  <div>Latency: &lt; 1.2µs</div>
+                  <div className="text-amber-300">Throughput: 198.7 Gbps Line-Rate</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Live Packet Flow Test Feedback Card */}
+          {cniTestResults && (
+            <div className="bg-emerald-950/30 border border-emerald-800/80 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                  <span className="text-sm font-bold text-white">
+                    {language === 'zh'
+                      ? '多 CNI 实时数据包连通性与时延基准测试报告'
+                      : 'Multi-CNI Real-Time Packet Benchmark Report'}
+                  </span>
+                </div>
+                <span className="text-xs text-emerald-300 font-mono">All 4 Protocols Validated</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs font-mono">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-slate-400 block mb-1">Multus Dispatch</span>
+                  <span className="text-purple-300 font-bold">{cniTestResults.multus?.dispatch_time}</span>
+                  <span className="text-[10px] text-slate-500 block mt-1">{cniTestResults.multus?.injected_nics} NICs Injected</span>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-slate-400 block mb-1">Calico Routing</span>
+                  <span className="text-indigo-300 font-bold">{cniTestResults.calico?.latency_ms} ms</span>
+                  <span className="text-[10px] text-emerald-400 block mt-1">{cniTestResults.calico?.bgp_peers}</span>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-slate-400 block mb-1">OVS L2 Bridge</span>
+                  <span className="text-cyan-300 font-bold">{cniTestResults.ovs?.throughput}</span>
+                  <span className="text-[10px] text-slate-400 block mt-1">VLAN {cniTestResults.ovs?.vlan_tag} Tagged</span>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-slate-400 block mb-1">SR-IOV RoCEv2</span>
+                  <span className="text-amber-300 font-bold">{cniTestResults.sriov?.latency_ms} ms (&lt;1.2µs)</span>
+                  <span className="text-[10px] text-emerald-400 block mt-1">{cniTestResults.sriov?.gpu_direct}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* --- SUBTAB: TALOS OMNI RAPID DEPLOYMENT WIZARD (120S BAREMETAL K8S) --- */}
+      {/* ========================================================================= */}
+      {activeSubTab === 'omni' && (
+        <div className="space-y-6">
+          {/* Top Banner */}
+          <div className="bg-gradient-to-r from-slate-900 via-amber-950/40 to-slate-900 border border-amber-800/60 rounded-2xl p-6 relative overflow-hidden shadow-xl">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2 mb-2">
+                  <span className="px-2.5 py-0.5 rounded bg-amber-950 border border-amber-600 text-amber-300 text-[10px] font-mono font-bold flex items-center gap-1.5 shadow-sm">
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                    TALOS OMNI RAPID ENGINE READY
+                  </span>
+                  <span className="text-slate-500 text-xs">|</span>
+                  <span className="text-xs text-amber-300 font-mono">
+                    Zero-Touch Declarative Bare-Metal Automation
+                  </span>
+                </div>
+                <h2 className="text-xl font-bold text-white tracking-tight">{t.omniTitle}</h2>
+                <p className="text-xs text-slate-300 max-w-3xl mt-1 leading-relaxed">{t.omniSubtitle}</p>
+              </div>
+
+              <div className="flex items-center gap-2.5 shrink-0">
+                <button
+                  onClick={handleInstantOmniDeploy}
+                  disabled={omniDeploying}
+                  className="px-5 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-amber-600/30 transition cursor-pointer"
+                >
+                  <Zap className={`w-4 h-4 ${omniDeploying ? 'animate-spin' : ''}`} />
+                  <span>{omniDeploying ? 'Deploying Fleet...' : t.btnInstantOmniDeploy}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Omni Machine Pools Summary */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-2">
+              <span className="text-xs text-slate-400 font-medium">Control-Plane Pool</span>
+              <div className="text-xl font-bold font-mono text-white">3 Nodes (HA Quorum)</div>
+              <p className="text-xs text-slate-400">
+                bmh-master-k8s-01 ~ 03 • 128 Cores • 512GB RAM • etcd Raft consensus
+              </p>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-2">
+              <span className="text-xs text-slate-400 font-medium">GPU Superpod Pool</span>
+              <div className="text-xl font-bold font-mono text-cyan-300">8 Nodes (64x H100)</div>
+              <p className="text-xs text-slate-400">
+                bmh-worker-k8s-01 ~ 08 • 8x H100 80GB SXM5 per node • Dual 200G RoCEv2
+              </p>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-2">
+              <span className="text-xs text-slate-400 font-medium">Compute / Spare Pool</span>
+              <div className="text-xl font-bold font-mono text-emerald-400">4 Nodes (Available)</div>
+              <p className="text-xs text-slate-400">
+                bmh-spare-pool-01 ~ 04 • Ready for autonomous elastic scaling
+              </p>
+            </div>
+          </div>
+
+          {/* Live Omni Rapid Deployment Timeline */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-5">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+              <div>
+                <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+                  <Gauge className="w-4 h-4 text-amber-400" />
+                  <span>
+                    {language === 'zh'
+                      ? 'Talos Omni 级 120 秒极速自动装机流水线 (Live Timeline)'
+                      : 'Talos Omni 120s Rapid Deployment Timeline'}
+                  </span>
+                </h3>
+                <span className="text-xs text-slate-400">
+                  Cluster: {omniProgress?.cluster_name || omniClusterName} • Target K8s: {omniK8sVersion}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className="px-2.5 py-1 rounded-lg bg-emerald-950 border border-emerald-800 text-emerald-400 font-mono text-xs font-bold">
+                  Total Time: {omniProgress?.elapsed_time_sec || 98}s (Sub-2-Minute Ready)
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-indigo-950 border border-indigo-800 text-indigo-300 font-mono text-xs">
+                  {omniProgress?.progress_percent || 100}% Complete
+                </span>
+              </div>
+            </div>
+
+            {/* Stepper Timeline List */}
+            <div className="space-y-3">
+              {(omniProgress?.steps || []).map((step: any, idx: number) => (
+                <div
+                  key={step.id || idx}
+                  className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="p-1 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800 mt-0.5">
+                      <Check className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 font-mono">
+                        <span className="font-bold text-white">
+                          {language === 'zh' && step.name_zh ? step.name_zh : step.name}
+                        </span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
+                          {step.agent_source}
+                        </span>
+                      </div>
+                      <p className="text-slate-400 mt-1 leading-relaxed">{step.detail}</p>
+                    </div>
+                  </div>
+
+                  <div className="shrink-0 font-mono text-[11px] text-slate-400 flex md:flex-col items-end gap-1">
+                    <span className="text-emerald-400 font-bold">{((step.duration_ms || 10000) / 1000).toFixed(1)}s</span>
+                    <span className="text-[10px] text-slate-500">COMPLETED</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Declarative Manifests Suite */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <FileCode className="w-4 h-4 text-cyan-400" />
+                <h3 className="text-sm font-bold text-white">
+                  {language === 'zh'
+                    ? '生产级声明式 YAML 拓扑包 (CAPM3 / Multus / Calico / OVS / SRIOV / MachineConfig)'
+                    : 'Declarative YAML Manifests Suite'}
+                </h3>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleCopyManifest(omniManifests[activeManifestKey] || '')}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  {copiedManifest ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedManifest ? 'Copied!' : 'Copy YAML'}</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Manifest Tabs */}
+            <div className="flex flex-wrap items-center gap-2">
+              {Object.keys(omniManifests).map(key => (
+                <button
+                  key={key}
+                  onClick={() => setActiveManifestKey(key)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-mono transition cursor-pointer ${
+                    activeManifestKey === key
+                      ? 'bg-cyan-600 text-white font-bold'
+                      : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  {key}
+                </button>
+              ))}
+            </div>
+
+            {/* Code Output Block */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 overflow-x-auto">
+              <pre className="text-xs font-mono text-cyan-300 leading-relaxed">
+                {omniManifests[activeManifestKey] || '# Select a manifest above to view YAML'}
+              </pre>
             </div>
           </div>
         </div>
