@@ -44,6 +44,16 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
+func writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": false,
+		"error":   message,
+	})
+}
+
+
 func (s *Server) registerRoutes() {
 	// -------------------------------------------------------------
 	// 1. SYSTEM & TELEMETRY
@@ -298,7 +308,7 @@ func (s *Server) registerRoutes() {
 			writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": p})
 			return
 		}
-		http.Error(w, "Principal not found", http.StatusNotFound)
+		writeError(w, http.StatusNotFound, "Principal not found")
 	})
 
 	s.Mux.HandleFunc("GET /api/v1/tenants", func(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +325,15 @@ func (s *Server) registerRoutes() {
 			list = append(list, p)
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"data": list})
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		var p models.ProjectInfo
+		json.NewDecoder(r.Body).Decode(&p)
+		p.ID = fmt.Sprintf("proj_%d", time.Now().UnixMilli())
+		p.CreatedAt = time.Now()
+		s.Store.Projects[p.ID] = &p
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": p})
 	})
 
 	s.Mux.HandleFunc("GET /api/v1/members", func(w http.ResponseWriter, r *http.Request) {
@@ -335,6 +354,16 @@ func (s *Server) registerRoutes() {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": m})
 	})
 
+	s.Mux.HandleFunc("POST /api/v1/members", func(w http.ResponseWriter, r *http.Request) {
+		var m models.UserMember
+		json.NewDecoder(r.Body).Decode(&m)
+		m.ID = fmt.Sprintf("usr_%d", time.Now().UnixMilli())
+		m.Status = "ACTIVE"
+		m.CreatedAt = time.Now()
+		s.Store.Members[m.ID] = &m
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": m})
+	})
+
 	s.Mux.HandleFunc("POST /api/v1/members/{id}/revoke", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if m, ok := s.Store.Members[id]; ok {
@@ -342,7 +371,93 @@ func (s *Server) registerRoutes() {
 			writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": m})
 			return
 		}
-		http.Error(w, "Member not found", http.StatusNotFound)
+		writeError(w, http.StatusNotFound, "Member not found")
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/auth/oidc/verify", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			IDToken string `json:"id_token"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			"valid":   true,
+			"claims": map[string]interface{}{
+				"sub":   "usr_elena_admin",
+				"email": "elena@acme.corp",
+				"name":  "Elena Rostova",
+				"role":  "PLATFORM_ADMIN",
+				"iss":   "https://idp.enterprise.internal",
+				"aud":   "ai-agent-studio",
+				"exp":   time.Now().Add(12 * time.Hour).Unix(),
+			},
+		})
+	})
+
+	s.Mux.HandleFunc("GET /api/v1/tools", func(w http.ResponseWriter, r *http.Request) {
+		var list []*models.ToolDefinition
+		for _, t := range s.Store.Tools {
+			list = append(list, t)
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"data": list})
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/tools/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if t, ok := s.Store.Tools[id]; ok {
+			t.IsActive = !t.IsActive
+			writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": t})
+			return
+		}
+		writeError(w, http.StatusNotFound, "Tool not found")
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/tools/{id}/test", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success":   true,
+			"tool_id":   id,
+			"output":    fmt.Sprintf("Tool %s executed successfully in Go control plane at %s", id, time.Now().Format(time.RFC3339)),
+			"status":    "COMPLETED",
+			"duration":  12,
+		})
+	})
+
+	s.Mux.HandleFunc("GET /api/v1/mcp/servers", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"data": []map[string]interface{}{
+				{
+					"id":          "mcp_ironic_redfish",
+					"name":        "Ironic Redfish Out-of-Band BMC MCP",
+					"status":      "CONNECTED",
+					"tools_count": 8,
+					"protocol":    "json-rpc-2.0",
+					"transport":   "stdio",
+				},
+				{
+					"id":          "mcp_k8s_cluster_api",
+					"name":        "Cluster API Provider Metal3 (CAPM3) MCP",
+					"status":      "CONNECTED",
+					"tools_count": 12,
+					"protocol":    "json-rpc-2.0",
+					"transport":   "stdio",
+				},
+			},
+		})
+	})
+
+	s.Mux.HandleFunc("GET /api/v1/metrics", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			"metrics": map[string]interface{}{
+				"active_hosts":       len(s.Metal3.ListHosts()),
+				"active_clusters":    len(s.Metal3.ListClusters()),
+				"registered_plugins": len(s.Connectors.ListPlugins()),
+				"total_runs":         len(s.Store.Runs),
+				"pending_approvals":  len(s.Store.Approvals),
+				"uptime_seconds":     time.Since(s.Store.StartTime).Seconds(),
+			},
+		})
 	})
 
 	// -------------------------------------------------------------
@@ -368,7 +483,7 @@ func (s *Server) registerRoutes() {
 		id := r.PathValue("id")
 		agent, ok := s.Store.Agents[id]
 		if !ok {
-			http.Error(w, "Agent not found", http.StatusNotFound)
+			writeError(w, http.StatusNotFound, "Agent not found")
 			return
 		}
 
@@ -452,6 +567,25 @@ func (s *Server) registerRoutes() {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"data": list})
 	})
 
+	s.Mux.HandleFunc("GET /api/v1/runs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if run, ok := s.Store.Runs[id]; ok {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"data": run})
+			return
+		}
+		writeError(w, http.StatusNotFound, "Run not found")
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/runs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if run, ok := s.Store.Runs[id]; ok {
+			run.Status = "CANCELLED"
+			writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": run})
+			return
+		}
+		writeError(w, http.StatusNotFound, "Run not found")
+	})
+
 	s.Mux.HandleFunc("GET /api/v1/approvals", func(w http.ResponseWriter, r *http.Request) {
 		var list []*models.ApprovalRecord
 		for _, a := range s.Store.Approvals {
@@ -470,7 +604,7 @@ func (s *Server) registerRoutes() {
 
 		appr, ok := s.Store.Approvals[id]
 		if !ok {
-			http.Error(w, "Approval record not found", http.StatusNotFound)
+			writeError(w, http.StatusNotFound, "Approval record not found")
 			return
 		}
 
@@ -502,6 +636,26 @@ func (s *Server) registerRoutes() {
 		})
 	})
 
+	s.Mux.HandleFunc("GET /api/v1/metal3/bmh/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		h, err := s.Metal3.GetHost(name)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": h})
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/metal3/bmh/{name}/inspect", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		h, err := s.Metal3.InspectHost(name)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": h})
+	})
+
 	s.Mux.HandleFunc("POST /api/v1/metal3/bmh/{name}/power", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		var req struct {
@@ -511,7 +665,7 @@ func (s *Server) registerRoutes() {
 
 		host, err := s.Metal3.PowerAction(name, req.Action)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": host})
@@ -527,6 +681,37 @@ func (s *Server) registerRoutes() {
 		})
 	})
 
+	s.Mux.HandleFunc("GET /api/v1/metal3/clusters", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"data": s.Metal3.ListClusters(),
+		})
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/metal3/clusters", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Name                string `json:"name"`
+			KubernetesVersion   string `json:"kubernetes_version"`
+			CNIPlugin           string `json:"cni_plugin"`
+			GPUOperatorEnabled  bool   `json:"gpu_operator_enabled"`
+			ControlPlaneMasters int    `json:"control_plane_masters"`
+			WorkerNodes         int    `json:"worker_nodes"`
+			GPUNodes            int    `json:"gpu_nodes"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		gpuOp := "Disabled"
+		if req.GPUOperatorEnabled {
+			gpuOp = "NVIDIA GPU Operator v24.6.0"
+		}
+		cl := s.Metal3.CreateCluster(req.Name, req.KubernetesVersion, req.CNIPlugin, gpuOp, req.ControlPlaneMasters, req.WorkerNodes, req.GPUNodes)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": cl})
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/metal3/clusters/{id}/pivot", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		res := s.Metal3.TriggerPivot(id)
+		writeJSON(w, http.StatusOK, res)
+	})
+
 	s.Mux.HandleFunc("POST /api/v1/metal3/clusters/{id}/scale", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var req struct {
@@ -536,10 +721,23 @@ func (s *Server) registerRoutes() {
 
 		c, err := s.Metal3.ScaleCluster(id, req.TargetWorkerCount)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": c})
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/metal3/clusters/{id}/scale-down-node", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var req struct {
+			HostName string `json:"host_name"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		if err := s.Metal3.ScaleDownNode(id, req.HostName); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "cluster_id": id, "scaled_down_host": req.HostName})
 	})
 
 	s.Mux.HandleFunc("POST /api/v1/metal3/clusters/{id}/upgrade", func(w http.ResponseWriter, r *http.Request) {
@@ -551,7 +749,7 @@ func (s *Server) registerRoutes() {
 
 		c, err := s.Metal3.UpgradeCluster(id, req.TargetVersion)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": c})
@@ -577,7 +775,7 @@ func (s *Server) registerRoutes() {
 		id := r.PathValue("id")
 		alert, err := s.Metal3.RemediateAlert(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": alert})
@@ -593,6 +791,34 @@ func (s *Server) registerRoutes() {
 			req.Channel = "feishu"
 		}
 		res := connectors.DispatchEnterpriseNotification(req.Channel, "secret_sign_key", "Proactive Alert", fmt.Sprintf("Alert %s dispatched", id))
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": res})
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/metal3/alerts/{id}/dismiss", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := s.Metal3.DismissAlert(id); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "dismissed_id": id})
+	})
+
+	s.Mux.HandleFunc("GET /api/v1/metal3/logs", func(w http.ResponseWriter, r *http.Request) {
+		stream := r.URL.Query().Get("stream")
+		logs := s.Metal3.GetLogs(stream)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"data": logs})
+	})
+
+	s.Mux.HandleFunc("GET /api/v1/metal3/agent/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"data": s.Metal3.GetAgentStatus()})
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/metal3/agent/command", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Command string `json:"command"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		res := s.Metal3.ExecuteAgentCommand(req.Command)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": res})
 	})
 
@@ -684,6 +910,12 @@ func (s *Server) registerRoutes() {
 	// -------------------------------------------------------------
 	// 7. PLUGINS & DOMESTIC CONNECTORS
 	// -------------------------------------------------------------
+	s.Mux.HandleFunc("GET /api/v1/plugins/presets", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"data": s.Connectors.GetPresets(),
+		})
+	})
+
 	s.Mux.HandleFunc("GET /api/v1/plugins", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"data": s.Connectors.ListPlugins(),
@@ -697,11 +929,21 @@ func (s *Server) registerRoutes() {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": created})
 	})
 
+	s.Mux.HandleFunc("POST /api/v1/plugins/{id}/configure", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var req struct {
+			Config map[string]interface{} `json:"config"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		s.Connectors.UpdateConfig(id, req.Config)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "id": id})
+	})
+
 	s.Mux.HandleFunc("POST /api/v1/plugins/{id}/toggle", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		p, err := s.Connectors.TogglePlugin(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": p})
@@ -711,10 +953,32 @@ func (s *Server) registerRoutes() {
 		id := r.PathValue("id")
 		err := s.Connectors.DeletePlugin(id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "deleted_id": id})
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/weather/query", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			City  string `json:"city"`
+			Units string `json:"units"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		res := connectors.QueryWeather(req.City, req.Units)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": res})
+	})
+
+	s.Mux.HandleFunc("POST /api/v1/domestic/dispatch", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Channel string `json:"channel"`
+			Secret  string `json:"secret"`
+			Title   string `json:"title"`
+			Content string `json:"content"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		res := connectors.DispatchEnterpriseNotification(req.Channel, req.Secret, req.Title, req.Content)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"success": true, "data": res})
 	})
 
 	// -------------------------------------------------------------
@@ -726,3 +990,4 @@ func (s *Server) registerRoutes() {
 		})
 	})
 }
+

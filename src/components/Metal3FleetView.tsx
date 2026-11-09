@@ -161,22 +161,39 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const [simulatingAlert, setSimulatingAlert] = useState<boolean>(false);
   const [alertFeedback, setAlertFeedback] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
 
+  // Safe JSON Fetch utility to prevent JSON.parse syntax errors on non-JSON/HTML/corrupted network responses
+  const safeJsonFetch = async (url: string, options?: RequestInit) => {
+    try {
+      const res = await fetch(url, options);
+      const text = await res.text();
+      if (!text || text.trim() === '') return { ok: res.ok, status: res.status, data: null };
+      try {
+        const parsed = JSON.parse(text);
+        return { ok: res.ok, status: res.status, ...parsed };
+      } catch {
+        return { ok: false, status: res.status, error: text };
+      }
+    } catch (err: any) {
+      return { ok: false, error: err?.message || 'Network error' };
+    }
+  };
+
   // Fetch Metal3 data from API
   const fetchMetal3Data = async () => {
     try {
       setRefreshing(true);
       const [ephRes, bmhRes, clRes, logsRes, agentRes, alertsRes, daRes, netRes, cniRes, omniRes, manRes] = await Promise.all([
-        fetch('/api/v1/metal3/eph-node').then(r => r.json()).catch(() => null),
-        fetch('/api/v1/metal3/bmh').then(r => r.json()).catch(() => null),
-        fetch('/api/v1/metal3/clusters').then(r => r.json()).catch(() => null),
-        fetch('/api/v1/metal3/logs').then(r => r.json()).catch(() => null),
-        fetch('/api/v1/metal3/agent/status').then(r => r.json()).catch(() => null),
-        fetch('/api/v1/metal3/alerts').then(r => r.json()).catch(() => null),
-        fetch('/api/v1/metal3/dual-agent/status').then(r => r.json()).catch(() => null),
-        fetch('/api/v1/metal3/network/spec').then(r => r.json()).catch(() => null),
-        fetch('/api/v1/metal3/cni/spec').then(r => r.json()).catch(() => null),
-        fetch('/api/v1/metal3/omni/status').then(r => r.json()).catch(() => null),
-        fetch('/api/v1/metal3/omni/manifests').then(r => r.json()).catch(() => null),
+        safeJsonFetch('/api/v1/metal3/eph-node'),
+        safeJsonFetch('/api/v1/metal3/bmh'),
+        safeJsonFetch('/api/v1/metal3/clusters'),
+        safeJsonFetch('/api/v1/metal3/logs'),
+        safeJsonFetch('/api/v1/metal3/agent/status'),
+        safeJsonFetch('/api/v1/metal3/alerts'),
+        safeJsonFetch('/api/v1/metal3/dual-agent/status'),
+        safeJsonFetch('/api/v1/metal3/network/spec'),
+        safeJsonFetch('/api/v1/metal3/cni/spec'),
+        safeJsonFetch('/api/v1/metal3/omni/status'),
+        safeJsonFetch('/api/v1/metal3/omni/manifests'),
       ]);
 
       if (ephRes?.data) setEphNode(ephRes.data);
@@ -218,11 +235,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const handleSimulateAlert = async (rule?: 'NODE_DEGRADED' | 'PROVISIONING_FAILED') => {
     setSimulatingAlert(true);
     try {
-      const res = await fetch('/api/v1/metal3/alerts/simulate', {
+      const res = await safeJsonFetch('/api/v1/metal3/alerts/simulate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rule: rule || 'PROVISIONING_FAILED' }),
-      }).then(r => r.json());
+      });
       if (res.data) {
         setAlertFeedback({
           message:
@@ -244,9 +261,9 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const handleRemediateAlert = async (alertId: string) => {
     setRemediatingAlertId(alertId);
     try {
-      const res = await fetch(`/api/v1/metal3/alerts/${alertId}/remediate`, {
+      const res = await safeJsonFetch(`/api/v1/metal3/alerts/${alertId}/remediate`, {
         method: 'POST',
-      }).then(r => r.json());
+      });
       if (res.success) {
         setAlertFeedback({
           message: t.alertRemediationSuccess,
@@ -265,11 +282,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const handleDispatchAlert = async (alertId: string, channel: 'feishu' | 'dingtalk' | 'wecom') => {
     setDispatchingChannel({ alertId, channel });
     try {
-      const res = await fetch(`/api/v1/metal3/alerts/${alertId}/dispatch`, {
+      const res = await safeJsonFetch(`/api/v1/metal3/alerts/${alertId}/dispatch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel }),
-      }).then(r => r.json());
+      });
       if (res.success) {
         setAlertFeedback({
           message: `${t.alertDispatchSuccess} (${channel.toUpperCase()})`,
@@ -287,7 +304,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   // Dismiss / Mark Alert Resolved
   const handleDismissAlert = async (alertId: string) => {
     try {
-      await fetch(`/api/v1/metal3/alerts/${alertId}/dismiss`, { method: 'POST' });
+      await safeJsonFetch(`/api/v1/metal3/alerts/${alertId}/dismiss`, { method: 'POST' });
       await fetchMetal3Data();
     } catch (err) {
       console.error('Dismiss alert failed:', err);
@@ -298,11 +315,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const handleTriggerDualRun = async (phase?: string) => {
     try {
       setTriggeringDualRun(true);
-      const res = await fetch('/api/v1/metal3/dual-agent/trigger', {
+      const res = await safeJsonFetch('/api/v1/metal3/dual-agent/trigger', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phase: phase || 'MULTI_CNI_CONVERGE' }),
-      }).then(r => r.json());
+      });
       if (res?.data) {
         setDualAgent(res.data);
       }
@@ -316,7 +333,10 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const handleSyncHeartbeats = async () => {
     try {
       setSyncingHeartbeats(true);
-      const res = await fetch('/api/v1/metal3/dual-agent/sync', { method: 'POST' }).then(r => r.json());
+      const res = await safeJsonFetch('/api/v1/metal3/dual-agent/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
       if (res?.data) setDualAgent(res.data);
     } catch (err) {
       console.error('Sync heartbeats failed:', err);
@@ -328,7 +348,10 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const handlePivotHandover = async () => {
     try {
       setPivotingHandover(true);
-      const res = await fetch('/api/v1/metal3/dual-agent/pivot', { method: 'POST' }).then(r => r.json());
+      const res = await safeJsonFetch('/api/v1/metal3/dual-agent/pivot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
       if (res?.data) setDualAgent(res.data);
     } catch (err) {
       console.error('Pivot handover failed:', err);
@@ -341,7 +364,10 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const handleTestCNIPackets = async () => {
     try {
       setTestingCNI(true);
-      const res = await fetch('/api/v1/metal3/cni/test', { method: 'POST' }).then(r => r.json());
+      const res = await safeJsonFetch('/api/v1/metal3/cni/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
       if (res?.results) {
         setCniTestResults(res.results);
       }
@@ -357,7 +383,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
     try {
       setOmniDeploying(true);
       const hostNames = hosts.slice(0, 11).map(h => h.name);
-      const res = await fetch('/api/v1/metal3/omni/deploy', {
+      const res = await safeJsonFetch('/api/v1/metal3/omni/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -370,7 +396,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
           enable_multi_cni: true,
           auto_pivot: true,
         }),
-      }).then(r => r.json());
+      });
       if (res?.data) {
         setOmniProgress(res.data);
         if (res.data.manifests) {
@@ -465,13 +491,13 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   // BMC Power Action
   const handlePowerAction = async (hostName: string, action: 'on' | 'off' | 'reboot' | 'pxe-boot') => {
     try {
-      const res = await fetch(`/api/v1/metal3/bmh/${hostName}/power`, {
+      const res = await safeJsonFetch(`/api/v1/metal3/bmh/${hostName}/power`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
-      }).then(r => r.json());
+      });
 
-      if (res.data) {
+      if (res?.data) {
         setHosts(prev => prev.map(h => (h.name === hostName ? res.data : h)));
         fetchMetal3Data();
       }
@@ -483,11 +509,12 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   // Inspect Host
   const handleInspectHost = async (hostName: string) => {
     try {
-      const res = await fetch(`/api/v1/metal3/bmh/${hostName}/inspect`, {
+      const res = await safeJsonFetch(`/api/v1/metal3/bmh/${hostName}/inspect`, {
         method: 'POST',
-      }).then(r => r.json());
+        headers: { 'Content-Type': 'application/json' },
+      });
 
-      if (res.data) {
+      if (res?.data) {
         setHosts(prev => prev.map(h => (h.name === hostName ? res.data : h)));
         fetchMetal3Data();
       }
@@ -508,11 +535,12 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
       return;
     }
     try {
-      const res = await fetch(`/api/v1/metal3/clusters/${clusterId}/pivot`, {
+      const res = await safeJsonFetch(`/api/v1/metal3/clusters/${clusterId}/pivot`, {
         method: 'POST',
-      }).then(r => r.json());
+        headers: { 'Content-Type': 'application/json' },
+      });
 
-      if (res.success) {
+      if (res?.success) {
         fetchMetal3Data();
       }
     } catch (err) {
@@ -527,16 +555,16 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
 
     setScalingCluster(true);
     try {
-      const res = await fetch(`/api/v1/metal3/clusters/${activeCluster.id}/scale`, {
+      const res = await safeJsonFetch(`/api/v1/metal3/clusters/${activeCluster.id}/scale`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           worker_nodes: Number(scaleTargetWorkers),
           gpu_nodes: Number(scaleTargetGpuNodes),
         }),
-      }).then(r => r.json());
+      });
 
-      if (res.success) {
+      if (res?.success) {
         setShowScaleModal(false);
         fetchMetal3Data();
       }
@@ -554,15 +582,15 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
 
     setUpgradingCluster(true);
     try {
-      const res = await fetch(`/api/v1/metal3/clusters/${activeCluster.id}/upgrade`, {
+      const res = await safeJsonFetch(`/api/v1/metal3/clusters/${activeCluster.id}/upgrade`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           target_k8s_version: upgradeTargetVersion,
         }),
-      }).then(r => r.json());
+      });
 
-      if (res.success) {
+      if (res?.success) {
         setShowUpgradeModal(false);
         fetchMetal3Data();
       }
@@ -588,13 +616,13 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
 
     setDrainingHostName(hostName);
     try {
-      const res = await fetch(`/api/v1/metal3/clusters/${activeCluster.id}/scale-down-node`, {
+      const res = await safeJsonFetch(`/api/v1/metal3/clusters/${activeCluster.id}/scale-down-node`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ host_name: hostName }),
-      }).then(r => r.json());
+      });
 
-      if (res.success) {
+      if (res?.success) {
         fetchMetal3Data();
       }
     } catch (err) {
@@ -612,13 +640,13 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
     setExecutingCmd(true);
     setCommandFeedback(null);
     try {
-      const res = await fetch('/api/v1/metal3/agent/command', {
+      const res = await safeJsonFetch('/api/v1/metal3/agent/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: cmd }),
-      }).then(r => r.json());
+      });
 
-      if (res.data) {
+      if (res?.data) {
         setCommandFeedback(res.data);
         setTerminalCommand('');
         fetchMetal3Data();
@@ -635,7 +663,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
     e.preventDefault();
     setDeployingCluster(true);
     try {
-      const res = await fetch('/api/v1/metal3/clusters', {
+      const res = await safeJsonFetch('/api/v1/metal3/clusters', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -649,9 +677,9 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
             gpu_nodes: Number(newClusterGpuNodes),
           },
         }),
-      }).then(r => r.json());
+      });
 
-      if (res.success) {
+      if (res?.success) {
         setShowDeployModal(false);
         fetchMetal3Data();
         setActiveSubTab('cluster');

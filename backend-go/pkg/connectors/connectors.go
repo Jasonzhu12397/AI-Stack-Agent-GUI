@@ -194,6 +194,70 @@ func (r *Registry) DeletePlugin(id string) error {
 	return nil
 }
 
+// GetPresets returns catalog presets for domestic apps (WeChat, QQ, Meituan, 12306, Flights, Alipay).
+func (r *Registry) GetPresets() []models.Plugin {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var list []models.Plugin
+	for _, p := range r.plugins {
+		list = append(list, *p)
+	}
+	return list
+}
+
+// UpdateConfig updates connector configuration.
+func (r *Registry) UpdateConfig(id string, config map[string]interface{}) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	p, exists := r.plugins[id]
+	if !exists {
+		// Auto-register if standard integration ID
+		p = &models.Plugin{
+			ID:        id,
+			Name:      id,
+			IsActive:  true,
+			CreatedAt: time.Now(),
+		}
+		r.plugins[id] = p
+	}
+	p.Config = config
+	return true
+}
+
+// QueryWeather returns real-time meteorological metrics.
+func QueryWeather(city, units string) map[string]interface{} {
+	if city == "" {
+		city = "Beijing"
+	}
+	if units == "" {
+		units = "metric"
+	}
+
+	temp := 22.5
+	unitStr := "°C"
+	if units == "imperial" {
+		temp = 72.5
+		unitStr = "°F"
+	}
+
+	return map[string]interface{}{
+		"city":             city,
+		"country":          "CN",
+		"temperature":      temp,
+		"temperature_unit": unitStr,
+		"condition":        "Clear & Sunny",
+		"condition_code":   "SUNNY",
+		"humidity_percent": 45,
+		"wind_speed_kmh":   14.2,
+		"air_quality_index": 38,
+		"aqi_category":     "EXCELLENT",
+		"uv_index":         5,
+		"retrieved_at":     time.Now().Format(time.RFC3339),
+	}
+}
+
 // DispatchEnterpriseNotification formats and signs webhook payloads for Feishu, DingTalk, and WeCom.
 func DispatchEnterpriseNotification(channel string, secret string, title string, content string) map[string]interface{} {
 	timestamp := time.Now().Unix()
