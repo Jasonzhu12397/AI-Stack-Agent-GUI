@@ -214,12 +214,62 @@ test('Metal3 API: AI Agent orchestrates cluster scale up, scale down, and rollin
     const upgRes = await fetch(`http://127.0.0.1:${port}/api/v1/metal3/clusters/${clusterId}/upgrade`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ target_k8s_version: 'v1.32.0' }),
+      body: JSON.stringify({ target_k8s_version: 'v1.33.0' }),
     });
     assert.equal(upgRes.status, 200);
     const upgBody = await upgRes.json();
     assert.equal(upgBody.success, true);
-    assert.equal(upgBody.data.k8s_version, 'v1.32.0');
+    assert.equal(upgBody.data.k8s_version, 'v1.33.0');
+  } finally {
+    server.close();
+  }
+});
+
+
+test('Metal3 API: applies supported Kubernetes versions and rejects unsupported targets', async () => {
+  const app = createTestApp();
+  const server = app.listen(0);
+  const address = server.address() as any;
+  const port = address.port;
+
+  try {
+    const clusterId = 'cluster_ai_superpod_01';
+
+    for (const targetVersion of ['v1.35.0', 'v1.36.0']) {
+      const response = await fetch('http://127.0.0.1:' + port + '/api/v1/metal3/clusters/' + clusterId + '/upgrade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_k8s_version: targetVersion }),
+      });
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.success, true);
+      assert.equal(body.data.k8s_version, targetVersion);
+    }
+
+    const unsupportedResponse = await fetch(
+      'http://127.0.0.1:' + port + '/api/v1/metal3/clusters/' + clusterId + '/upgrade',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_k8s_version: 'v1.34.0' }),
+      }
+    );
+    assert.equal(unsupportedResponse.status, 400);
+    const unsupportedBody = await unsupportedResponse.json();
+    assert.equal(unsupportedBody.error.code, 'UNSUPPORTED_KUBERNETES_VERSION');
+
+    const downgradeResponse = await fetch(
+      'http://127.0.0.1:' + port + '/api/v1/metal3/clusters/' + clusterId + '/upgrade',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_k8s_version: 'v1.33.0' }),
+      }
+    );
+    assert.equal(downgradeResponse.status, 400);
+    const downgradeBody = await downgradeResponse.json();
+    assert.equal(downgradeBody.error.code, 'INVALID_KUBERNETES_VERSION_TRANSITION');
   } finally {
     server.close();
   }
