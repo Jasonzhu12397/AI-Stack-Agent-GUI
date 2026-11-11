@@ -55,6 +55,8 @@ import {
 } from 'lucide-react';
 import {
   BareMetalHost,
+  SUPPORTED_KUBERNETES_VERSIONS,
+  isKubernetesVersionUpgrade,
   EphemeralBootstrapNode,
   TargetCluster,
   Metal3LogEvent,
@@ -145,7 +147,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
 
   // Rolling Version Upgrade Modal
   const [showUpgradeModal, setShowUpgradeModal] = useState<boolean>(false);
-  const [upgradeTargetVersion, setUpgradeTargetVersion] = useState<string>('v1.32.0');
+  const [upgradeTargetVersion, setUpgradeTargetVersion] = useState<string>(SUPPORTED_KUBERNETES_VERSIONS[0]);
   const [upgradingCluster, setUpgradingCluster] = useState<boolean>(false);
 
   // Single Node Drain / Scale-down
@@ -753,6 +755,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   });
 
   const activeCluster = clusters[0];
+  const availableUpgradeVersions = activeCluster
+    ? SUPPORTED_KUBERNETES_VERSIONS.filter(version =>
+        isKubernetesVersionUpgrade(version, activeCluster.k8s_version)
+      )
+    : [];
 
   return (
     <div className="space-y-6">
@@ -2256,7 +2263,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   </button>
 
                   <button
-                    onClick={() => setShowUpgradeModal(true)}
+                    onClick={() => {
+                      setUpgradeTargetVersion(availableUpgradeVersions[0] || '');
+                      setShowUpgradeModal(true);
+                    }}
+                    disabled={availableUpgradeVersions.length === 0}
                     className="px-3.5 py-2 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-700/60 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
                     title="In-place rolling upgrade of Kubernetes version"
                   >
@@ -3631,12 +3642,21 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                     onChange={e => setUpgradeTargetVersion(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-bold text-purple-300 focus:outline-none"
                   >
-                    <option value="v1.32.0">v1.32.0 (Latest Stable)</option>
-                    <option value="v1.31.3">v1.31.3 (Patch Release)</option>
-                    <option value="v1.32.1-rc.1">v1.32.1-rc.1 (Next Gen)</option>
+                    {availableUpgradeVersions.map(version => (
+                      <option key={version} value={version}>
+                        {version.replace(/\.0$/, '')} ({language === 'zh' ? '支持版本' : 'Supported'})
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
+              {availableUpgradeVersions.length === 0 && (
+                <p className="text-xs text-amber-400">
+                  {language === 'zh'
+                    ? '当前集群已处于最高支持版本，没有可用的升级目标。'
+                    : 'The cluster is already at the highest supported version. No upgrade target is available.'}
+                </p>
+              )}
 
               {/* Pre-flight Checks */}
               <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs space-y-2">
@@ -3679,7 +3699,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                 </button>
                 <button
                   type="submit"
-                  disabled={upgradingCluster}
+                  disabled={upgradingCluster || !availableUpgradeVersions.includes(upgradeTargetVersion as typeof SUPPORTED_KUBERNETES_VERSIONS[number])}
                   className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-2 cursor-pointer shadow-lg shadow-purple-600/30"
                 >
                   {upgradingCluster ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
