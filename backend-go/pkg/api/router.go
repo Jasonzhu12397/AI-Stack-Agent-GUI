@@ -743,9 +743,17 @@ func (s *Server) registerRoutes() {
 	s.Mux.HandleFunc("POST /api/v1/metal3/clusters/{id}/upgrade", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var req struct {
-			TargetVersion string `json:"target_version"`
+			TargetVersion    string `json:"target_version"`
+			TargetK8sVersion string `json:"target_k8s_version"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
+		if req.TargetVersion == "" {
+			req.TargetVersion = req.TargetK8sVersion
+		}
+		if req.TargetVersion == "" {
+			writeError(w, http.StatusBadRequest, "target_k8s_version is required")
+			return
+		}
 
 		c, err := s.Metal3.UpgradeCluster(id, req.TargetVersion)
 		if err != nil {

@@ -3,6 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export const SUPPORTED_KUBERNETES_VERSIONS = ['v1.33.0', 'v1.35.0', 'v1.36.0'] as const;
+export type SupportedKubernetesVersion = (typeof SUPPORTED_KUBERNETES_VERSIONS)[number];
+
+export const isKubernetesVersionUpgrade = (targetVersion: string, currentVersion: string): boolean => {
+  const parseVersion = (version: string) => version.replace(/^v/, '').split('.').map(part => Number.parseInt(part, 10) || 0);
+  const target = parseVersion(targetVersion);
+  const current = parseVersion(currentVersion);
+
+  for (let index = 0; index < Math.max(target.length, current.length); index += 1) {
+    const targetPart = target[index] || 0;
+    const currentPart = current[index] || 0;
+    if (targetPart !== currentPart) return targetPart > currentPart;
+  }
+
+  return false;
+};
+
 export type PowerStatus = 'ON' | 'OFF' | 'REBOOTING' | 'PXE_BOOTING' | 'UNKNOWN';
 
 export type ProvisioningStatus =
@@ -1229,6 +1246,16 @@ export class Metal3Engine {
     const cluster = this.clusters.get(clusterId);
     if (!cluster) {
       throw new Error(`Target Cluster '${clusterId}' not found`);
+    }
+
+    if (!SUPPORTED_KUBERNETES_VERSIONS.includes(targetVersion as SupportedKubernetesVersion)) {
+      throw new Error(
+        'Unsupported Kubernetes version ' + targetVersion + '. Supported versions: ' + SUPPORTED_KUBERNETES_VERSIONS.join(', ')
+      );
+    }
+
+    if (!isKubernetesVersionUpgrade(targetVersion, cluster.k8s_version)) {
+      throw new Error('Target Kubernetes version ' + targetVersion + ' must be newer than current version ' + cluster.k8s_version);
     }
 
     const previousVersion = cluster.k8s_version;

@@ -241,3 +241,36 @@ func TestOmniDeployAndManifests(t *testing.T) {
 	}
 }
 
+
+
+func TestMetal3KubernetesVersionUpgradeValidation(t *testing.T) {
+	srv := setupTestServer()
+	clusterID := "cluster-prod-gpu-k8s"
+
+	for _, version := range []string{"v1.33.0", "v1.35.0", "v1.36.0"} {
+		body := strings.NewReader(`{"target_k8s_version":"` + version + `"}`)
+		req := httptest.NewRequest("POST", "/api/v1/metal3/clusters/"+clusterID+"/upgrade", body)
+		rec := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("Expected 200 for supported version %s, got %d: %s", version, rec.Code, rec.Body.String())
+		}
+	}
+
+	unsupportedBody := strings.NewReader(`{"target_k8s_version":"v1.34.0"}`)
+	unsupportedReq := httptest.NewRequest("POST", "/api/v1/metal3/clusters/"+clusterID+"/upgrade", unsupportedBody)
+	unsupportedRec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(unsupportedRec, unsupportedReq)
+	if unsupportedRec.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400 for unsupported version, got %d", unsupportedRec.Code)
+	}
+
+	downgradeBody := strings.NewReader(`{"target_k8s_version":"v1.33.0"}`)
+	downgradeReq := httptest.NewRequest("POST", "/api/v1/metal3/clusters/"+clusterID+"/upgrade", downgradeBody)
+	downgradeRec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(downgradeRec, downgradeReq)
+	if downgradeRec.Code != http.StatusBadRequest {
+		t.Fatalf("Expected 400 for downgrade, got %d", downgradeRec.Code)
+	}
+}
