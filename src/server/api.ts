@@ -9,7 +9,7 @@ import { DAGValidator } from '../domain/dagValidator';
 import { DataSanitizer } from '../domain/sanitizer';
 import { IdentityManager } from '../domain/identity';
 import { PluginRegistry, WeatherEngine, DomesticAppDispatcher } from '../domain/plugins';
-import { globalMetal3Engine } from '../domain/metal3';
+import { globalMetal3Engine, SUPPORTED_KUBERNETES_VERSIONS } from '../domain/metal3';
 import {
   Run,
   StepRun,
@@ -1610,8 +1610,17 @@ apiRouter.post('/metal3/clusters/:id/upgrade', (req: Request, res: Response) => 
   const { target_k8s_version } = req.body;
   const principal = (req as any).principal;
 
-  if (!target_k8s_version) {
+  if (typeof target_k8s_version !== 'string' || !target_k8s_version.trim()) {
     return res.status(400).json({ error: { code: 'MISSING_VERSION', message: 'target_k8s_version is required' } });
+  }
+
+  if (!(SUPPORTED_KUBERNETES_VERSIONS as readonly string[]).includes(target_k8s_version)) {
+    return res.status(400).json({
+      error: {
+        code: 'UNSUPPORTED_KUBERNETES_VERSION',
+        message: 'Unsupported Kubernetes version ' + target_k8s_version + '. Supported versions: ' + SUPPORTED_KUBERNETES_VERSIONS.join(', '),
+      },
+    });
   }
 
   try {
@@ -1633,7 +1642,13 @@ apiRouter.post('/metal3/clusters/:id/upgrade', (req: Request, res: Response) => 
 
     res.json({ success: true, data: updated });
   } catch (err: any) {
-    res.status(404).json({ error: { code: 'CLUSTER_NOT_FOUND', message: err.message } });
+    const notFound = String(err?.message || '').includes('not found');
+    res.status(notFound ? 404 : 400).json({
+      error: {
+        code: notFound ? 'CLUSTER_NOT_FOUND' : 'INVALID_KUBERNETES_VERSION_TRANSITION',
+        message: err.message,
+      },
+    });
   }
 });
 
