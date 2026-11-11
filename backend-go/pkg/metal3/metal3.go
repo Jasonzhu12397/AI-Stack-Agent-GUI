@@ -2,12 +2,50 @@ package metal3
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/enterprise/ai-agent-studio-backend-go/pkg/models"
 )
+
+var supportedKubernetesVersions = map[string]struct{}{
+	"v1.33.0": {},
+	"v1.35.0": {},
+	"v1.36.0": {},
+}
+
+func isSupportedKubernetesVersion(version string) bool {
+	_, ok := supportedKubernetesVersions[version]
+	return ok
+}
+
+func compareKubernetesVersions(left, right string) int {
+	parse := func(version string) []int {
+		parts := strings.Split(strings.TrimPrefix(version, "v"), ".")
+		result := make([]int, 3)
+		for index, part := range parts {
+			if index >= len(result) {
+				break
+			}
+			result[index], _ = strconv.Atoi(part)
+		}
+		return result
+	}
+
+	leftParts := parse(left)
+	rightParts := parse(right)
+	for index := range leftParts {
+		if leftParts[index] > rightParts[index] {
+			return 1
+		}
+		if leftParts[index] < rightParts[index] {
+			return -1
+		}
+	}
+	return 0
+}
 
 // Engine orchestrates the Metal3 Ironic BareMetal fleet, Dual-Agent controller, and Multi-CNI networking.
 type Engine struct {
@@ -773,6 +811,10 @@ func (e *Engine) UpgradeCluster(clusterID string, targetVersion string) (*models
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	if !isSupportedKubernetesVersion(targetVersion) {
+		return nil, fmt.Errorf("unsupported Kubernetes version %q; supported versions: v1.33.0, v1.35.0, v1.36.0", targetVersion)
+	}
+
 	c, exists := e.clusters[clusterID]
 	if !exists {
 		c = &models.TargetCluster{
@@ -786,6 +828,10 @@ func (e *Engine) UpgradeCluster(clusterID string, targetVersion string) (*models
 		}
 		e.clusters[clusterID] = c
 		return c, nil
+	}
+
+	if compareKubernetesVersions(targetVersion, c.Version) <= 0 {
+		return nil, fmt.Errorf("target Kubernetes version %q must be newer than current version %q", targetVersion, c.Version)
 	}
 
 	c.Version = targetVersion
