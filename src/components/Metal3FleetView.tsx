@@ -55,8 +55,6 @@ import {
 } from 'lucide-react';
 import {
   BareMetalHost,
-  SUPPORTED_KUBERNETES_VERSIONS,
-  isKubernetesVersionUpgrade,
   EphemeralBootstrapNode,
   TargetCluster,
   Metal3LogEvent,
@@ -65,6 +63,8 @@ import {
   LogStreamType,
   EphAgentTelemetry,
   HostAlert,
+  SupportedK8sVersion,
+  SUPPORTED_K8S_VERSIONS,
 } from '../domain/metal3';
 
 interface Metal3FleetViewProps {
@@ -83,7 +83,19 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const [refreshing, setRefreshing] = useState<boolean>(false);
 
   // Active Main SubTab
-  const [activeSubTab, setActiveSubTab] = useState<'dashboard' | 'dualagent' | 'multicni' | 'omni' | 'terminal' | 'cluster' | 'fleet' | 'ephnode'>('dashboard');
+  const [activeSubTab, setActiveSubTab] = useState<'dashboard' | 'dualagent' | 'multicni' | 'omni' | 'versions' | 'terminal' | 'cluster' | 'fleet' | 'ephnode'>('dashboard');
+
+  // Kubernetes Supported Versions & Fleet Upgrade State (v1.33 ~ v1.36)
+  const [k8sVersions, setK8sVersions] = useState<SupportedK8sVersion[]>(SUPPORTED_K8S_VERSIONS);
+  const [selectedTargetVersion, setSelectedTargetVersion] = useState<string>('v1.35.0');
+  const [upgradeScope, setUpgradeScope] = useState<'all' | 'control-plane' | 'worker-gpu' | 'custom'>('all');
+  const [selectedUpgradeNodes, setSelectedUpgradeNodes] = useState<string[]>([]);
+  const [upgradePolicy, setUpgradePolicy] = useState<'rolling' | 'canary' | 'batch'>('rolling');
+  const [drainTimeout, setDrainTimeout] = useState<number>(300);
+  const [upgradeProgress, setUpgradeProgress] = useState<any>(null);
+  const [isApplyingVersion, setIsApplyingVersion] = useState<boolean>(false);
+  const [versionFeedback, setVersionFeedback] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
+  const [versionFilterCategory, setVersionFilterCategory] = useState<'all' | 'stable' | 'preview'>('all');
 
   // Dual-Agent Orchestration State
   const [dualAgent, setDualAgent] = useState<any>(null);
@@ -96,6 +108,9 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const [multiCNI, setMultiCNI] = useState<any>(null);
   const [cniTestResults, setCniTestResults] = useState<any>(null);
   const [testingCNI, setTestingCNI] = useState<boolean>(false);
+  const [cniFleet, setCniFleet] = useState<any>(null);
+  const [reconcilingCNI, setReconcilingCNI] = useState<boolean>(false);
+  const [activeCniArtifact, setActiveCniArtifact] = useState<string>('00-multus.conf');
 
   // Talos Omni Rapid Deployment State
   const [omniProgress, setOmniProgress] = useState<any>(null);
@@ -107,6 +122,35 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const [omniManifests, setOmniManifests] = useState<Record<string, string>>({});
   const [activeManifestKey, setActiveManifestKey] = useState<string>('01-cluster-metal3-capi.yaml');
   const [copiedManifest, setCopiedManifest] = useState<boolean>(false);
+
+  // Packet Flow Simulator State
+  const [packetTrafficType, setPacketTrafficType] = useState<'GPU_RDMA_ROCEV2' | 'DPDK_USERSPACE_PMD' | 'POD_L2_VLAN200' | 'APISERVER_MGMT'>('GPU_RDMA_ROCEV2');
+  const [packetSimResult, setPacketSimResult] = useState<any>(null);
+  const [simulatingPacket, setSimulatingPacket] = useState<boolean>(false);
+
+  // Stepper State
+  const [omniStepping, setOmniStepping] = useState<boolean>(false);
+  const [omniResetting, setOmniResetting] = useState<boolean>(false);
+
+  // Manifest Live Editor & Validation State
+  const [manifestEditorText, setManifestEditorText] = useState<string>('');
+  const [manifestValidation, setManifestValidation] = useState<any>(null);
+  const [validatingYaml, setValidatingYaml] = useState<boolean>(false);
+
+  // Real-time Host Redfish Telemetry
+  const [hostTelemetry, setHostTelemetry] = useState<any>(null);
+  const [fetchingTelemetry, setFetchingTelemetry] = useState<boolean>(false);
+  const [reprovisioningHost, setReprovisioningHost] = useState<boolean>(false);
+
+  // Pod-Resident Dual-Agent Daemons State (100% Pure Go)
+  const [podDaemons, setPodDaemons] = useState<any>(null);
+  const [podFiles, setPodFiles] = useState<any>(null);
+  const [activePodCodeKey, setActivePodCodeKey] = useState<string>('eph_main_go');
+  const [podCommandTarget, setPodCommandTarget] = useState<'eph' | 'target'>('eph');
+  const [podCommandInput, setPodCommandInput] = useState<string>('INSPECT_INVENTORY');
+  const [podCommandOutput, setPodCommandOutput] = useState<string>('');
+  const [dispatchingPodCmd, setDispatchingPodCmd] = useState<boolean>(false);
+  const [copiedPodCode, setCopiedPodCode] = useState<boolean>(false);
 
   // Terminal & Live Logs State
   const [activeStream, setActiveStream] = useState<LogStreamType | 'all'>('all');
@@ -133,7 +177,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   const [showDeployModal, setShowDeployModal] = useState<boolean>(false);
   const [newClusterName, setNewClusterName] = useState<string>('ai-superpod-h100-cluster-02');
   const [newClusterK8sVer, setNewClusterK8sVer] = useState<string>('v1.31.2');
-  const [newClusterCNI, setNewClusterCNI] = useState<'Cilium eBPF (RoCEv2 + BGP mesh)' | 'Calico BGP'>('Cilium eBPF (RoCEv2 + BGP mesh)');
+  const [newClusterCNI, setNewClusterCNI] = useState<string>('Multus + Calico + OVS-DPDK + Multi-SR-IOV/DPDK');
   const [newClusterMasters, setNewClusterMasters] = useState<number>(3);
   const [newClusterWorkers, setNewClusterWorkers] = useState<number>(32);
   const [newClusterGpuNodes, setNewClusterGpuNodes] = useState<number>(32);
@@ -147,7 +191,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
 
   // Rolling Version Upgrade Modal
   const [showUpgradeModal, setShowUpgradeModal] = useState<boolean>(false);
-  const [upgradeTargetVersion, setUpgradeTargetVersion] = useState<string>(SUPPORTED_KUBERNETES_VERSIONS[0]);
+  const [upgradeTargetVersion, setUpgradeTargetVersion] = useState<string>('v1.32.0');
   const [upgradingCluster, setUpgradingCluster] = useState<boolean>(false);
 
   // Single Node Drain / Scale-down
@@ -183,8 +227,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   // Fetch Metal3 data from API
   const fetchMetal3Data = async () => {
     try {
-      setRefreshing(true);
-      const [ephRes, bmhRes, clRes, logsRes, agentRes, alertsRes, daRes, netRes, cniRes, omniRes, manRes] = await Promise.all([
+      const [ephRes, bmhRes, clRes, logsRes, agentRes, alertsRes, daRes, netRes, cniRes, cniFleetRes, omniRes, manRes, podDaemonsRes, podCodeRes, k8sVerRes] = await Promise.all([
         safeJsonFetch('/api/v1/metal3/eph-node'),
         safeJsonFetch('/api/v1/metal3/bmh'),
         safeJsonFetch('/api/v1/metal3/clusters'),
@@ -194,23 +237,80 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
         safeJsonFetch('/api/v1/metal3/dual-agent/status'),
         safeJsonFetch('/api/v1/metal3/network/spec'),
         safeJsonFetch('/api/v1/metal3/cni/spec'),
+        safeJsonFetch('/api/v1/metal3/cni/fleet'),
         safeJsonFetch('/api/v1/metal3/omni/status'),
         safeJsonFetch('/api/v1/metal3/omni/manifests'),
+        safeJsonFetch('/api/v1/metal3/agents/pod-daemons'),
+        safeJsonFetch('/api/v1/metal3/agents/pod-code'),
+        safeJsonFetch('/api/v1/metal3/k8s-versions'),
       ]);
 
+      if (k8sVerRes?.data && Array.isArray(k8sVerRes.data)) {
+        setK8sVersions(k8sVerRes.data);
+      }
       if (ephRes?.data) setEphNode(ephRes.data);
       if (bmhRes?.data) {
-        setHosts(bmhRes.data);
+        const normalizedHosts = bmhRes.data.map((h: any) => ({
+          ...h,
+          boot_image: h.boot_image || 'talos-v1.8.2-cloud-init.iso',
+          provisioning_progress_percent: h.provisioning_progress_percent ?? (h.provisioning_status === 'ActiveInCluster' ? 100 : 80),
+          hardware: {
+            vendor: h.hardware?.vendor || 'Dell EMC',
+            model: h.hardware?.model || 'PowerEdge R760xa AI SuperServer',
+            cpu: h.hardware?.cpu || 'Dual Intel Xeon Platinum 8480+ (112C/224T)',
+            cores: h.hardware?.cores || h.hardware?.cpu_cores || 128,
+            ram_gb: h.hardware?.ram_gb || h.hardware?.memory_gb || 512,
+            nvme_tb: h.hardware?.nvme_tb || 15.36,
+            gpus: h.hardware?.gpus || h.hardware?.gpu_model || '8x NVIDIA H100 80GB SXM5',
+            nics: h.hardware?.nics || 'Dual 200Gbps Mellanox ConnectX-7',
+          },
+          sensors: {
+            cpu_temp_c: h.sensors?.cpu_temp_c || 42.0,
+            fan_speed_rpm: h.sensors?.fan_speed_rpm || h.sensors?.fan_rpm || 7200,
+            power_watts: h.sensors?.power_watts || h.sensors?.power_watt || 420,
+            system_health: h.sensors?.system_health || 'OK',
+            dimm_status: h.sensors?.dimm_status || 'ALL_CHANNELS_NOMINAL',
+            nvme_smart_health: h.sensors?.nvme_smart_health || '100% HEALTHY (0 ERRORS)',
+          },
+          ip_addresses: h.ip_addresses || {
+            bmc_ip: h.ip_addresses?.bmc_ip || '10.240.10.101',
+            provisioning_ip: h.ip_addresses?.provisioning_ip || '10.244.100.21',
+            target_ip: h.ip_addresses?.target_ip || '10.250.0.21',
+          },
+          serial_console_recent: h.serial_console_recent || [
+            `[SOL ${h.name}] System booted and synchronized`,
+          ],
+        }));
+        setHosts(normalizedHosts);
         if (selectedHost) {
-          const updated = bmhRes.data.find((h: BareMetalHost) => h.name === selectedHost.name);
+          const updated = normalizedHosts.find((h: BareMetalHost) => h.name === selectedHost.name);
           if (updated) setSelectedHost(updated);
         }
       }
       if (clRes?.data) {
-        setClusters(clRes.data);
-        if (clRes.data[0]) {
-          setScaleTargetWorkers(clRes.data[0].scale.worker_nodes);
-          setScaleTargetGpuNodes(clRes.data[0].scale.gpu_nodes);
+        const normalized = clRes.data.map((c: any) => ({
+          ...c,
+          k8s_version: c.k8s_version || c.version || 'v1.31.2',
+          cni: c.cni || 'Multus + Calico + OVS + SR-IOV',
+          gpu_operator: c.gpu_operator || 'NVIDIA GPU Operator v24.6.0 (8x H100)',
+          progress_percent: c.progress_percent ?? 100,
+          current_stage: c.current_stage || 'FLEET_READY',
+          api_endpoint: c.api_endpoint || 'https://10.240.10.10:6443',
+          scale: c.scale || {
+            control_plane_nodes: c.control_plane_nodes || 3,
+            worker_nodes: c.worker_nodes || 7,
+            gpu_nodes: c.worker_nodes || 7,
+            total_nodes: (c.control_plane_nodes || 3) + (c.worker_nodes || 7),
+          },
+        }));
+        setClusters(normalized);
+        if (normalized[0]) {
+          setScaleTargetWorkers(normalized[0].scale?.worker_nodes ?? 7);
+          setScaleTargetGpuNodes(normalized[0].scale?.gpu_nodes ?? 7);
+          const upgRes = await safeJsonFetch(`/api/v1/metal3/clusters/${normalized[0].id}/upgrade-status`);
+          if (upgRes?.data?.job_id) {
+            setUpgradeProgress(upgRes.data);
+          }
         }
       }
       if (logsRes?.data) setLogs(logsRes.data);
@@ -219,11 +319,18 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
       if (daRes?.data) setDualAgent(daRes.data);
       if (netRes?.data) setDualNetwork(netRes.data);
       if (cniRes?.data) setMultiCNI(cniRes.data);
+      if (cniFleetRes?.data) setCniFleet(cniFleetRes.data);
       if (omniRes?.data) setOmniProgress(omniRes.data);
       if (manRes?.manifests) {
         setOmniManifests(manRes.manifests);
         const keys = Object.keys(manRes.manifests);
         if (keys.length > 0 && !activeManifestKey) setActiveManifestKey(keys[0]);
+      }
+      if (podDaemonsRes?.data) {
+        setPodDaemons(podDaemonsRes.data);
+      }
+      if (podCodeRes?.files) {
+        setPodFiles(podCodeRes.files);
       }
     } catch (err) {
       console.error('Failed to fetch metal3 data:', err);
@@ -231,6 +338,34 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
       setLoading(false);
       setRefreshing(false);
     }
+  };
+
+  const handleDispatchPodCommand = async (targetAgent?: 'eph' | 'target', cmd?: string) => {
+    const tgt = targetAgent || podCommandTarget;
+    const command = cmd || podCommandInput;
+    if (!command) return;
+    try {
+      setDispatchingPodCmd(true);
+      const res = await safeJsonFetch('/api/v1/metal3/agents/pod-daemons/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_agent: tgt, command }),
+      });
+      if (res?.data?.output) {
+        setPodCommandOutput(res.data.output);
+      }
+      await fetchMetal3Data();
+    } catch (err) {
+      console.error('Dispatch pod command failed:', err);
+    } finally {
+      setDispatchingPodCmd(false);
+    }
+  };
+
+  const handleCopyPodCode = (code: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedPodCode(true);
+    setTimeout(() => setCopiedPodCode(false), 2000);
   };
 
   // Simulate Node Degradation / Provisioning Failure
@@ -413,6 +548,184 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
     }
   };
 
+  // Packet Flow Simulation (Multi-CNI & Dual Network)
+  const handleSimulatePacketFlow = async (trafficType?: 'GPU_RDMA_ROCEV2' | 'DPDK_USERSPACE_PMD' | 'POD_L2_VLAN200' | 'APISERVER_MGMT') => {
+    const tType = trafficType || packetTrafficType;
+    try {
+      setSimulatingPacket(true);
+      setPacketTrafficType(tType);
+      const res = await safeJsonFetch('/api/v1/metal3/cni/simulate-packet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ traffic_type: tType }),
+      });
+      if (res?.data) {
+        setPacketSimResult(res.data);
+      }
+    } catch (err) {
+      console.error('Simulate packet failed:', err);
+    } finally {
+      setSimulatingPacket(false);
+    }
+  };
+
+  // Fleet CNI State Machine Reconcile & Drift Handlers (pkg/cni)
+  const handleReconcileCNIFleet = async (convergeAll: boolean = true) => {
+    try {
+      setReconcilingCNI(true);
+      const res = await safeJsonFetch('/api/v1/metal3/cni/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ converge_all: convergeAll }),
+      });
+      if (res?.data) {
+        setCniFleet(res.data);
+      }
+    } catch (err) {
+      console.error('Reconcile CNI fleet failed:', err);
+    } finally {
+      setReconcilingCNI(false);
+    }
+  };
+
+  const handleInjectCNIDrift = async (hostName: string = 'bmh-worker-k8s-01', plugin: string = 'sriov-dpdk') => {
+    try {
+      setReconcilingCNI(true);
+      await safeJsonFetch('/api/v1/metal3/cni/drift', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host_name: hostName, plugin, degraded: false }),
+      });
+      const fleetRes = await safeJsonFetch('/api/v1/metal3/cni/fleet');
+      if (fleetRes?.data) setCniFleet(fleetRes.data);
+    } catch (err) {
+      console.error('Inject CNI drift failed:', err);
+    } finally {
+      setReconcilingCNI(false);
+    }
+  };
+
+  // Omni Deployment Stepper Handlers
+  const handleStartOmni = async () => {
+    try {
+      setOmniStepping(true);
+      const hostNames = hosts.slice(0, 11).map(h => h.name);
+      const res = await safeJsonFetch('/api/v1/metal3/omni/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cluster_name: omniClusterName,
+          k8s_version: omniK8sVersion,
+          control_plane_nodes: omniControlPlanes,
+          worker_gpu_nodes: omniGPUWorkers,
+          selected_host_names: hostNames,
+          enable_dual_network: true,
+          enable_multi_cni: true,
+          auto_pivot: true,
+        }),
+      });
+      if (res?.data) {
+        setOmniProgress(res.data);
+      }
+      await fetchMetal3Data();
+    } catch (err) {
+      console.error('Start Omni failed:', err);
+    } finally {
+      setOmniStepping(false);
+    }
+  };
+
+  const handleNextOmniStep = async () => {
+    try {
+      setOmniStepping(true);
+      const res = await safeJsonFetch('/api/v1/metal3/omni/step', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res?.data) {
+        setOmniProgress(res.data);
+      }
+      await fetchMetal3Data();
+    } catch (err) {
+      console.error('Next Omni step failed:', err);
+    } finally {
+      setOmniStepping(false);
+    }
+  };
+
+  const handleResetOmni = async () => {
+    try {
+      setOmniResetting(true);
+      const res = await safeJsonFetch('/api/v1/metal3/omni/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res?.data) {
+        setOmniProgress(res.data);
+      }
+      await fetchMetal3Data();
+    } catch (err) {
+      console.error('Reset Omni failed:', err);
+    } finally {
+      setOmniResetting(false);
+    }
+  };
+
+  // YAML Manifest Validation with Pure Go Engine
+  const handleValidateYaml = async (contentToValidate?: string) => {
+    try {
+      setValidatingYaml(true);
+      const content = contentToValidate || manifestEditorText || omniManifests[activeManifestKey] || '';
+      const res = await safeJsonFetch('/api/v1/metal3/omni/validate-yaml', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: activeManifestKey,
+          content: content,
+        }),
+      });
+      if (res?.data) {
+        setManifestValidation(res.data);
+      }
+    } catch (err) {
+      console.error('Validate YAML failed:', err);
+    } finally {
+      setValidatingYaml(false);
+    }
+  };
+
+  // Real-time Redfish Telemetry
+  const handleFetchHostTelemetry = async (hostName: string) => {
+    try {
+      setFetchingTelemetry(true);
+      const res = await safeJsonFetch(`/api/v1/metal3/bmh/${hostName}/telemetry`);
+      if (res?.telemetry) {
+        setHostTelemetry(res.telemetry);
+      }
+    } catch (err) {
+      console.error('Fetch host telemetry failed:', err);
+    } finally {
+      setFetchingTelemetry(false);
+    }
+  };
+
+  const handleReprovisionHost = async (hostName: string) => {
+    try {
+      setReprovisioningHost(true);
+      const res = await safeJsonFetch(`/api/v1/metal3/bmh/${hostName}/reprovision`, {
+        method: 'POST',
+      });
+      if (res?.success) {
+        await fetchMetal3Data();
+        await handleFetchHostTelemetry(hostName);
+      }
+    } catch (err) {
+      console.error('Reprovision host failed:', err);
+    } finally {
+      setReprovisioningHost(false);
+    }
+  };
+
   const handleCopyManifest = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopiedManifest(true);
@@ -443,13 +756,13 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
         'Eph-Node AI Agent heartbeat ping OK; mTLS 1.3 handshake verified with control plane',
         'Autonomous Watchdog: checked BareMetalHost CRDs (67 items); 0 reconciliation errors',
         'Autonomous Telemetry: bmh-gpu-supernode-01..08 NVLink 900GB/s bandwidth confirmed nominal',
-        'Autonomous Policy Check: Cilium BGP spine-leaf peering established with Top-of-Rack switch',
+        'Autonomous Policy Check: Calico BGP spine-leaf peering + Multus NAD mesh verified with ToR switch',
       ];
 
       const sampleK8sEvents = [
         'kubelet[2104]: [cgroup] cgroup v2 memory & pids limits synchronized across all pods',
         'stacked-etcd: raft leader heartbeat round-trip 0.8ms across 3 control plane masters',
-        'cilium-agent: eBPF sockops program active; bypassing TCP/IP stack overhead for pod traffic',
+        'multus-cni: Attached eth0 (Calico), net1 (OVS-DPDK br-data), net2 (vfio-pci DPDK), net3 (CX-7 RoCEv2)',
         'nvidia-fabricmanager: All 8 SXM5 H100 GPUs reporting NVSwitch non-blocking full mesh',
       ];
 
@@ -589,17 +902,116 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           target_k8s_version: upgradeTargetVersion,
+          policy: upgradePolicy,
+          drain_timeout: drainTimeout,
         }),
       });
 
       if (res?.success) {
         setShowUpgradeModal(false);
+        setUpgradeProgress(res.data);
         fetchMetal3Data();
       }
     } catch (err) {
       console.error('Upgrade failed:', err);
     } finally {
       setUpgradingCluster(false);
+    }
+  };
+
+  // Kubernetes Version Matrix Apply Handler (Fleet & Scoped)
+  const handleApplyVersionToFleet = async (customVersion?: string) => {
+    const targetVer = customVersion || selectedTargetVersion;
+    if (!activeCluster) return;
+
+    setIsApplyingVersion(true);
+    setVersionFeedback(null);
+    try {
+      let nodesToUpgrade: string[] = [];
+      if (upgradeScope === 'all') {
+        nodesToUpgrade = hosts.map(h => h.name);
+      } else if (upgradeScope === 'control-plane') {
+        nodesToUpgrade = hosts.filter(h => h.assigned_role === 'control-plane').map(h => h.name);
+      } else if (upgradeScope === 'worker-gpu') {
+        nodesToUpgrade = hosts.filter(h => h.assigned_role === 'worker-gpu').map(h => h.name);
+      } else if (upgradeScope === 'custom') {
+        nodesToUpgrade = selectedUpgradeNodes.length > 0 ? selectedUpgradeNodes : hosts.slice(0, 3).map(h => h.name);
+      }
+
+      const res = await safeJsonFetch(`/api/v1/metal3/clusters/${activeCluster.id}/upgrade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_k8s_version: targetVer,
+          policy: upgradePolicy,
+          target_nodes: nodesToUpgrade,
+          drain_timeout: drainTimeout,
+        }),
+      });
+
+      if (res?.success) {
+        setUpgradeProgress(res.data);
+        setVersionFeedback({
+          message: `${language === 'zh' ? '成功触发集群版本平滑升级！目标版本: ' : 'Successfully triggered cluster rolling upgrade! Target: '} ${targetVer}`,
+          type: 'success',
+        });
+        await fetchMetal3Data();
+      } else {
+        const errMsg = typeof res?.error === 'string'
+          ? res.error
+          : res?.error?.message || res?.message || 'Upgrade trigger failed';
+        setVersionFeedback({
+          message: errMsg,
+          type: 'error',
+        });
+      }
+    } catch (err: any) {
+      setVersionFeedback({
+        message: err?.message || 'Network error during upgrade',
+        type: 'error',
+      });
+    } finally {
+      setIsApplyingVersion(false);
+    }
+  };
+
+  // Apply Version to Single Specific Node Handler
+  const handleApplyVersionToSingleNode = async (nodeName: string, targetVer?: string) => {
+    const ver = targetVer || selectedTargetVersion;
+    setIsApplyingVersion(true);
+    try {
+      const res = await safeJsonFetch('/api/v1/metal3/nodes/version-apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          node_name: nodeName,
+          target_k8s_version: ver,
+          policy: 'rolling',
+          drain_timeout: 180,
+        }),
+      });
+      if (res?.success) {
+        setVersionFeedback({
+          message: `${language === 'zh' ? '节点 ' : 'Node '}${nodeName} ${language === 'zh' ? '已成功应用版本: ' : 'successfully applied version: '}${ver}`,
+          type: 'success',
+        });
+        await fetchMetal3Data();
+      } else {
+        const errMsg = typeof res?.error === 'string'
+          ? res.error
+          : res?.error?.message || res?.message || 'Node version apply failed';
+        setVersionFeedback({
+          message: errMsg,
+          type: 'error',
+        });
+      }
+    } catch (err: any) {
+      setVersionFeedback({
+        message: err?.message || 'Node version apply failed',
+        type: 'error',
+      });
+    } finally {
+      setIsApplyingVersion(false);
     }
   };
 
@@ -755,11 +1167,6 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
   });
 
   const activeCluster = clusters[0];
-  const availableUpgradeVersions = activeCluster
-    ? SUPPORTED_KUBERNETES_VERSIONS.filter(version =>
-        isKubernetesVersionUpgrade(version, activeCluster.k8s_version)
-      )
-    : [];
 
   return (
     <div className="space-y-6">
@@ -815,7 +1222,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               <span className="text-xs text-emerald-400 font-mono">1 Node K8s</span>
             </div>
             <div className="text-[10px] text-slate-400 mt-1 truncate">
-              {ephNode?.ip_address} | {ephNode?.host_specs?.cpu.split(' ')[0]} Cores
+              {ephNode?.ip_address || '10.240.10.1'} | {(ephNode?.host_specs?.cpu ? ephNode.host_specs.cpu.split(' ')[0] : '64')} Cores
             </div>
           </div>
 
@@ -1158,6 +1565,22 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
           </span>
         </button>
 
+        {/* Tab: Kubernetes Version Matrix & Node Upgrade Selector (v1.33 ~ v1.36) */}
+        <button
+          onClick={() => setActiveSubTab('versions')}
+          className={`px-3.5 py-2 text-xs font-semibold rounded-lg flex items-center gap-2 transition cursor-pointer ${
+            activeSubTab === 'versions'
+              ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-600/30'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+          }`}
+        >
+          <Boxes className="w-4 h-4 text-purple-300" />
+          <span>{t.tabMetal3Versions || (language === 'zh' ? 'K8s 多版本编排矩阵' : 'K8s Version Matrix')}</span>
+          <span className="px-1.5 py-0.2 rounded bg-purple-950 border border-purple-800 text-purple-300 text-[10px] font-mono font-bold">
+            v1.33 ~ v1.36
+          </span>
+        </button>
+
         {/* Tab 3: Target Cluster Pipeline */}
         <button
           onClick={() => setActiveSubTab('cluster')}
@@ -1171,7 +1594,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
           <span>{language === 'zh' ? '目标集群流水线' : 'Target K8s Pipeline'}</span>
           {activeCluster && (
             <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 text-[10px] font-mono">
-              {activeCluster.scale.total_nodes} Nodes
+              {activeCluster.scale?.total_nodes ?? ((activeCluster.control_plane_nodes || 3) + (activeCluster.worker_nodes || 7))} Nodes
             </span>
           )}
         </button>
@@ -1420,11 +1843,20 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                       {/* Host Header */}
                       <div className="flex items-start justify-between gap-2 mb-3">
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-mono font-bold text-sm text-white tracking-tight">{host.name}</span>
                             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
                               {host.rack_location}
                             </span>
+                            <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-800 flex items-center gap-1">
+                              <Boxes className="w-2.5 h-2.5" />
+                              {host.k8s_version || 'v1.31.2'}
+                            </span>
+                            {host.upgrade_status && host.upgrade_status !== 'IDLE' && (
+                              <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-800 animate-pulse">
+                                {host.upgrade_status}
+                              </span>
+                            )}
                             {isDegradedOrFailed && (
                               <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-rose-600 text-white animate-pulse">
                                 ALERT
@@ -1510,7 +1942,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                           />
                         </div>
                         <div className="flex items-center justify-between text-[10px] text-slate-500 mt-1 font-mono">
-                          <span>Image: {host.boot_image.split('.')[0]}</span>
+                          <span>Image: {(host.boot_image ? host.boot_image.replace(/\.iso$/, '') : 'talos-v1.8')}</span>
                           <span>{host.provisioning_progress_percent}%</span>
                         </div>
                       </div>
@@ -1653,6 +2085,17 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                             <span>{t.btnDrain}</span>
                           </button>
                         )}
+
+                        {/* Apply Version quick button */}
+                        <button
+                          onClick={() => handleApplyVersionToSingleNode(host.name)}
+                          disabled={isApplyingVersion}
+                          className="px-2 py-1 rounded bg-purple-950/70 hover:bg-purple-900/80 text-purple-300 border border-purple-800 text-[11px] font-medium transition cursor-pointer flex items-center gap-1"
+                          title={`Apply Kubernetes ${selectedTargetVersion} to ${host.name}`}
+                        >
+                          <Boxes className="w-3 h-3 text-purple-400" />
+                          <span>{t.btnApplyToNode || (language === 'zh' ? '应用版本' : 'Apply')}</span>
+                        </button>
                       </div>
 
                       <button
@@ -1678,6 +2121,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   <thead className="bg-slate-950/80 border-b border-slate-800 text-slate-400 font-semibold font-mono">
                     <tr>
                       <th className="py-3 px-4">HOST & RACK</th>
+                      <th className="py-3 px-3">K8S VER</th>
                       <th className="py-3 px-3">POWER</th>
                       <th className="py-3 px-3">PHASE</th>
                       <th className="py-3 px-3">BMC OOB IP</th>
@@ -1698,8 +2142,13 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                           <td className="py-3 px-4">
                             <div className="font-bold text-white">{host.name}</div>
                             <div className="text-[10px] text-slate-400 font-sans">
-                              {host.rack_location} • {host.hardware.model.split(' ')[0]}
+                              {host.rack_location} • {(host.hardware?.model ? host.hardware.model.split(' ')[0] : 'Dell-R760xa')}
                             </div>
+                          </td>
+                          <td className="py-3 px-3">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-950 text-purple-300 border border-purple-800">
+                              {host.k8s_version || 'v1.31.2'}
+                            </span>
                           </td>
                           <td className="py-3 px-3">
                             <span
@@ -1738,6 +2187,14 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                             {host.sensors ? `${host.sensors.cpu_temp_c}°C / ${host.sensors.power_watts}W` : 'N/A'}
                           </td>
                           <td className="py-3 px-4 text-right space-x-1">
+                            <button
+                              onClick={() => handleApplyVersionToSingleNode(host.name)}
+                              disabled={isApplyingVersion}
+                              className="px-2 py-1 rounded bg-purple-950/80 hover:bg-purple-900 text-purple-300 text-[11px] font-sans transition cursor-pointer"
+                              title={`Apply Kubernetes ${selectedTargetVersion} to ${host.name}`}
+                            >
+                              {language === 'zh' ? '应用版本' : 'Apply'}
+                            </button>
                             {host.provisioning_status === 'ActiveInCluster' && !isMaster && (
                               <button
                                 onClick={() => handleDrainNode(host.name)}
@@ -1842,7 +2299,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               {(agentTelemetry?.active_reconciliations || [
                 'Watch BareMetalHost CRDs (67 items)',
                 'Ironic Conductor Power Watchdog',
-                'Cilium eBPF BGP Peer Mesh Verification',
+                'Calico BGP + Multus + OVS-DPDK + SR-IOV Mesh Verification',
                 'NVIDIA FabricManager SXM5 Health Probes',
                 'K8s In-Place Rolling Upgrade & Elastic Autoscaler Daemon',
               ]).map((rec, i) => (
@@ -2128,8 +2585,8 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                     type="text"
                     placeholder={
                       language === 'zh'
-                        ? '输入命令发送至远端 eph-node 运行 (例如: kubeadm token list, ironic node-list, cilium status)...'
-                        : 'Type command to run on remote eph-node (e.g. kubeadm token list, ironic node-list, cilium status)...'
+                        ? '输入命令发送至远端 eph-node 运行 (例如: kubeadm token list, ironic node-list, calicoctl node status)...'
+                        : 'Type command to run on remote eph-node (e.g. kubeadm token list, ironic node-list, calicoctl node status)...'
                     }
                     value={terminalCommand}
                     onChange={e => setTerminalCommand(e.target.value)}
@@ -2164,10 +2621,10 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleDispatchCommand('cilium status && cilium bpf tunnel list')}
+                    onClick={() => handleDispatchCommand('calicoctl node status && ovs-vsctl show && dpdk-devbind.py --status')}
                     className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 cursor-pointer"
                   >
-                    cilium status
+                    multi-cni status
                   </button>
                   <button
                     type="button"
@@ -2263,11 +2720,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   </button>
 
                   <button
-                    onClick={() => {
-                      setUpgradeTargetVersion(availableUpgradeVersions[0] || '');
-                      setShowUpgradeModal(true);
-                    }}
-                    disabled={availableUpgradeVersions.length === 0}
+                    onClick={() => setShowUpgradeModal(true)}
                     className="px-3.5 py-2 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-700/60 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
                     title="In-place rolling upgrade of Kubernetes version"
                   >
@@ -2809,8 +3262,338 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               ))}
             </div>
           </div>
+
+          {/* Pod-Resident Pure Go Dual-Agent Workbench & Runtime Code */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="px-2.5 py-0.5 rounded bg-emerald-950 border border-emerald-600 text-emerald-300 text-[10px] font-mono font-bold flex items-center gap-1.5 shadow-sm">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    100% PURE GOLANG 1.22+ POD DAEMONS
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-700 text-cyan-300 text-[10px] font-mono">
+                    Dual Kubernetes Pod Daemons
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-indigo-950 border border-indigo-700 text-indigo-300 text-[10px] font-mono">
+                    Zero Node/Python in Pods
+                  </span>
+                </div>
+                <h3 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                  <Terminal className="w-5 h-5 text-cyan-400" />
+                  <span>{t.podWorkbenchTitle}</span>
+                </h3>
+                <p className="text-xs text-slate-300 max-w-3xl mt-1 leading-relaxed">
+                  {t.podWorkbenchSubtitle}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 font-mono text-xs text-slate-400">
+                <span className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300">
+                  Coordinator: <strong className="text-cyan-400">http://10.240.10.1:9090</strong>
+                </span>
+              </div>
+            </div>
+
+            {/* Live Pod Status & Real-Time Go Telemetry */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Pod 1: Eph-Node Bootstrap Daemon */}
+              <div className="bg-slate-950 border border-cyan-900/60 rounded-xl p-5 space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-lg bg-cyan-950 border border-cyan-800 text-cyan-400">
+                      <Cpu className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-white font-mono">
+                          Agent 1: Eph-Node Bootstrap Daemon
+                        </span>
+                        <span className="px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-700 text-cyan-300 text-[10px] font-mono">
+                          Go 1.22
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-400 font-mono">
+                        Pod: {podDaemons?.agent_1_eph_node?.pod_name || 'metal3-eph-agent-daemon-7b89f4'}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-700 text-emerald-400 text-[10px] font-mono font-bold">
+                    {podDaemons?.agent_1_eph_node?.status || 'ONLINE'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-center text-xs font-mono">
+                  <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">Namespace / Node</span>
+                    <span className="text-cyan-300 text-[11px] font-bold">metal3-system / eph-node</span>
+                  </div>
+                  <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">Go Memory (RSS)</span>
+                    <span className="text-emerald-400 text-[11px] font-bold">28 MB</span>
+                  </div>
+                  <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">CPU & Heartbeat</span>
+                    <span className="text-indigo-300 text-[11px] font-bold">1.4% (1.2s ago)</span>
+                  </div>
+                </div>
+
+                <div>
+                  <span className="text-[11px] font-semibold text-slate-300 block mb-1.5">
+                    {language === 'zh' ? '⚡ 快速指令下发 (通过 Go HTTP 通信):' : '⚡ Quick Command Dispatch (via Go IPC):'}
+                  </span>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <button
+                      onClick={() => handleDispatchPodCommand('eph', 'INSPECT_INVENTORY')}
+                      disabled={dispatchingPodCmd}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 text-[11px] font-mono flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Zap className="w-3 h-3 text-cyan-400" />
+                      <span>{t.cmdQuickInspect}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDispatchPodCommand('eph', 'TRIGGER_CP01_BOOT')}
+                      disabled={dispatchingPodCmd}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-indigo-300 text-[11px] font-mono flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Play className="w-3 h-3 text-indigo-400" />
+                      <span>{t.cmdQuickBoot}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDispatchPodCommand('eph', 'PREPARE_PIVOT')}
+                      disabled={dispatchingPodCmd}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-amber-300 text-[11px] font-mono flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <RotateCw className="w-3 h-3 text-amber-400" />
+                      <span>{t.cmdQuickPreparePivot}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDispatchPodCommand('eph', 'COMPLETE_PIVOT')}
+                      disabled={dispatchingPodCmd}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 text-[11px] font-mono flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                      <span>Pivot 完成移交</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Pod 2: Target Cluster Lifecycle Daemon */}
+              <div className="bg-slate-950 border border-indigo-900/60 rounded-xl p-5 space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-lg bg-indigo-950 border border-indigo-800 text-indigo-400">
+                      <Boxes className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-white font-mono">
+                          Agent 2: Target Cluster Lifecycle Daemon
+                        </span>
+                        <span className="px-1.5 py-0.2 rounded bg-indigo-950 border border-indigo-700 text-indigo-300 text-[10px] font-mono">
+                          Go 1.22
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-400 font-mono">
+                        Pod: {podDaemons?.agent_2_target_capi?.pod_name || 'capm3-target-agent-operator-9c41a2'}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-700 text-emerald-400 text-[10px] font-mono font-bold">
+                    {podDaemons?.agent_2_target_capi?.status || 'ACTIVE'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-center text-xs font-mono">
+                  <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">Namespace / Cluster</span>
+                    <span className="text-indigo-300 text-[11px] font-bold">capi-system / prod-gpu</span>
+                  </div>
+                  <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">Go Memory (RSS)</span>
+                    <span className="text-emerald-400 text-[11px] font-bold">34 MB</span>
+                  </div>
+                  <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+                    <span className="text-[10px] text-slate-400 block">CPU & Heartbeat</span>
+                    <span className="text-cyan-300 text-[11px] font-bold">2.1% (0.8s ago)</span>
+                  </div>
+                </div>
+
+                <div>
+                  <span className="text-[11px] font-semibold text-slate-300 block mb-1.5">
+                    {language === 'zh' ? '⚡ 快速指令下发 (通过 Go HTTP 通信):' : '⚡ Quick Command Dispatch (via Go IPC):'}
+                  </span>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <button
+                      onClick={() => handleDispatchPodCommand('target', 'VERIFY_ETCD_QUORUM')}
+                      disabled={dispatchingPodCmd}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-emerald-300 text-[11px] font-mono flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                      <span>{t.cmdQuickEtcd}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDispatchPodCommand('target', 'ACCEPT_PIVOT_CRD')}
+                      disabled={dispatchingPodCmd}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-300 text-[11px] font-mono flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Boxes className="w-3 h-3 text-cyan-400" />
+                      <span>{t.cmdQuickAcceptPivot}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDispatchPodCommand('target', 'IGNITE_MULTI_CNI')}
+                      disabled={dispatchingPodCmd}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-indigo-300 text-[11px] font-mono flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Network className="w-3 h-3 text-indigo-400" />
+                      <span>{t.cmdQuickIgniteCNI}</span>
+                    </button>
+                    <button
+                      onClick={() => handleDispatchPodCommand('target', 'AUDIT_GPU_RDMA')}
+                      disabled={dispatchingPodCmd}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-amber-300 text-[11px] font-mono flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Cpu className="w-3 h-3 text-amber-400" />
+                      <span>{t.cmdQuickAuditGpu}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Interactive Pod Command Dispatch Console */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-semibold text-slate-300">
+                    {language === 'zh' ? '目标 Pod Agent:' : 'Target Pod Agent:'}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setPodCommandTarget('eph')}
+                      className={`px-3 py-1 rounded-lg text-xs font-mono font-semibold transition cursor-pointer ${
+                        podCommandTarget === 'eph'
+                          ? 'bg-cyan-600 text-white shadow-sm shadow-cyan-600/40'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Agent 1 (Eph-Node Pod)
+                    </button>
+                    <button
+                      onClick={() => setPodCommandTarget('target')}
+                      className={`px-3 py-1 rounded-lg text-xs font-mono font-semibold transition cursor-pointer ${
+                        podCommandTarget === 'target'
+                          ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/40'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Agent 2 (Target CAPI Pod)
+                    </button>
+                  </div>
+                </div>
+
+                <span className="text-[11px] text-slate-400 font-mono">
+                  Runtime: 100% Pure Go Binary via IPC
+                </span>
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={podCommandInput}
+                  onChange={(e) => setPodCommandInput(e.target.value)}
+                  placeholder="Enter instruction (e.g. INSPECT_INVENTORY, VERIFY_ETCD_QUORUM, IGNITE_MULTI_CNI)..."
+                  className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                />
+                <button
+                  onClick={() => handleDispatchPodCommand()}
+                  disabled={dispatchingPodCmd || !podCommandInput}
+                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-md shadow-indigo-600/30"
+                >
+                  <Send className={`w-3.5 h-3.5 ${dispatchingPodCmd ? 'animate-spin' : ''}`} />
+                  <span>{dispatchingPodCmd ? '...' : t.btnDispatchPodCommand}</span>
+                </button>
+              </div>
+
+              {podCommandOutput && (
+                <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-emerald-400 space-y-1">
+                  <div className="text-[10px] text-slate-400 font-bold">
+                    {language === 'zh' ? 'Go 容器内守护进程实时执行结果:' : 'Go Pod Daemon Real-Time Execution Output:'}
+                  </div>
+                  <div>{podCommandOutput}</div>
+                </div>
+              )}
+            </div>
+
+            {/* Tabbed Pure Go Pod Source Code & YAML Manifest Viewer */}
+            <div className="space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <h4 className="text-xs font-bold text-white font-mono flex items-center gap-2">
+                  <FileCode className="w-4 h-4 text-cyan-400" />
+                  <span>{t.podCodeInspectTitle}</span>
+                </h4>
+
+                <button
+                  onClick={() => {
+                    const content = podFiles?.[activePodCodeKey]?.content || '';
+                    handleCopyPodCode(content);
+                  }}
+                  className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-mono flex items-center gap-1 transition cursor-pointer self-start sm:self-auto"
+                >
+                  <Copy className="w-3 h-3 text-cyan-400" />
+                  <span>{copiedPodCode ? t.copiedNotice : t.btnCopyPodCode}</span>
+                </button>
+              </div>
+
+              {/* Subtabs for Go files and YAML manifests */}
+              <div className="flex flex-wrap gap-1.5 border-b border-slate-800 pb-2">
+                {[
+                  { key: 'eph_main_go', label: 'cmd/eph-agent/main.go', badge: 'Go', role: 'Agent 1 Pod 入口' },
+                  { key: 'eph_pkg_go', label: 'pkg/agent/ephnode/agent.go', badge: 'Go', role: 'Agent 1 守护核心' },
+                  { key: 'eph_dhcp_go', label: 'pkg/agent/ephnode/dhcp_monitor.go', badge: 'Go', role: 'Agent 1 DHCP 监控' },
+                  { key: 'eph_probe_go', label: 'pkg/agent/ephnode/probe_server.go', badge: 'Go', role: 'Agent 1 Pod 探针' },
+                  { key: 'target_main_go', label: 'cmd/target-agent/main.go', badge: 'Go', role: 'Agent 2 Pod 入口' },
+                  { key: 'target_pkg_go', label: 'pkg/agent/target/agent.go', badge: 'Go', role: 'Agent 2 守护核心' },
+                  { key: 'target_cni_go', label: 'pkg/agent/target/cni_mesh.go', badge: 'Go', role: 'Agent 2 Multi-CNI 网状' },
+                  { key: 'target_etcd_go', label: 'pkg/agent/target/etcd_verifier.go', badge: 'Go', role: 'Agent 2 Etcd 仲裁' },
+                  { key: 'target_probe_go', label: 'pkg/agent/target/probe_server.go', badge: 'Go', role: 'Agent 2 Pod 探针' },
+                  { key: 'proto_handshake_go', label: 'pkg/agent/protocol/handshake.go', badge: 'Go', role: '双 Agent 握手协议' },
+                  { key: 'eph_pod_yaml', label: 'deploy/eph-agent-pod.yaml', badge: 'YAML', role: 'Agent 1 Pod 清单' },
+                  { key: 'target_ds_yaml', label: 'deploy/target-agent-daemonset.yaml', badge: 'YAML', role: 'Agent 2 DaemonSet' },
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    onClick={() => setActivePodCodeKey(item.key)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium flex items-center gap-2 transition cursor-pointer ${
+                      activePodCodeKey === item.key
+                        ? 'bg-slate-800 text-cyan-300 border border-cyan-700/80 shadow-sm'
+                        : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${item.badge === 'Go' ? 'bg-cyan-950 text-cyan-400 border border-cyan-800' : 'bg-indigo-950 text-indigo-400 border border-indigo-800'}`}>
+                      {item.badge}
+                    </span>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Source Code Container */}
+              <div className="rounded-xl bg-slate-950 border border-slate-800 p-4 font-mono text-xs overflow-x-auto max-h-96 text-slate-300 relative shadow-inner">
+                <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800/80 text-[11px] text-slate-400">
+                  <span>File: <strong className="text-cyan-400">{podFiles?.[activePodCodeKey]?.path || activePodCodeKey}</strong></span>
+                  <span>Role: {podFiles?.[activePodCodeKey]?.role || 'Go Daemon'}</span>
+                </div>
+                <pre className="whitespace-pre leading-relaxed text-[11.5px] font-mono text-cyan-100">
+                  {podFiles?.[activePodCodeKey]?.content || `// Loading pure Go source code for ${activePodCodeKey}...`}
+                </pre>
+              </div>
+            </div>
+          </div>
         </div>
       )}
+
 
       {/* ========================================================================= */}
       {/* --- SUBTAB: DUAL-NETWORK & MULTI-CNI COEXISTENCE (MULTUS/CALICO/OVS/SR-IOV) --- */}
@@ -2828,7 +3611,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   </span>
                   <span className="text-slate-500 text-xs">|</span>
                   <span className="text-xs text-emerald-300 font-mono">
-                    Multus v4.1 + Calico v3.28 + OVS v2.17 + SR-IOV v1.4
+                    Multus v4.1 + Calico v3.28 + OVS-DPDK v2.17 + Multi-DPDK/SR-IOV
                   </span>
                 </div>
                 <h2 className="text-xl font-bold text-white tracking-tight">{t.multiCNITitle}</h2>
@@ -2954,11 +3737,13 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                 <Network className="w-4 h-4 text-emerald-400" />
                 <span>
                   {language === 'zh'
-                    ? '4 种 CNI 融合协同工作矩阵 (Multus + Calico + OVS + SR-IOV)'
-                    : '4-CNI Coexistence Operational Matrix'}
+                    ? '多 CNI 融合协同工作矩阵 (Multus + Calico + OVS-DPDK + 多路 DPDK / SR-IOV)'
+                    : 'Multi-CNI Coexistence Operational Matrix (Multus + Calico + OVS-DPDK + Multi-DPDK/SR-IOV)'}
                 </span>
               </h3>
-              <span className="text-xs text-slate-400 font-mono">All 4 Running Simultaneously</span>
+              <span className="text-xs text-slate-400 font-mono">
+                {multiCNI?.multus?.config?.delegates?.length || 4} Delegates Running Simultaneously
+              </span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-2">
@@ -2969,17 +3754,19 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                     <span className="text-xs font-bold font-mono text-purple-300 px-2 py-0.5 rounded bg-purple-950 border border-purple-800">
                       MULTUS CNI
                     </span>
-                    <span className="text-[10px] font-mono text-emerald-400">ACTIVE</span>
+                    <span className="text-[10px] font-mono text-emerald-400">
+                      {multiCNI?.multus?.version || 'v4.1.0'} ACTIVE
+                    </span>
                   </div>
                   <div className="text-xs font-bold text-white">Meta-Plugin Multi-NIC</div>
                   <div className="text-[11px] text-slate-400 mt-1">
                     {language === 'zh'
-                      ? '多网卡附着驱动，向每个 Pod 同时挂载主网卡与附加加速网卡'
-                      : 'Meta-plugin attaching multiple NIC interfaces to single Pod container'}
+                      ? '多网卡附着调度器，为单 Pod 同步注入 Calico 主网卡、OVS-DPDK 与多路 DPDK/SR-IOV 网卡'
+                      : 'Meta-plugin attaching primary Calico eth0 plus OVS-DPDK & multiple DPDK/SR-IOV NICs'}
                   </div>
                 </div>
                 <div className="pt-2 border-t border-slate-800/80 text-[11px] font-mono text-slate-400">
-                  <div>Dispatch: &lt; 0.1µs</div>
+                  <div>Delegates: {(multiCNI?.multus?.config?.delegates || ['calico', 'ovs-dpdk', 'dpdk-sriov-pf0', 'sriov-rocev2-pf1']).join(', ')}</div>
                   <div className="text-purple-300">CRD: NetworkAttachmentDefinition</div>
                 </div>
               </div>
@@ -2991,62 +3778,129 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                     <span className="text-xs font-bold font-mono text-indigo-300 px-2 py-0.5 rounded bg-indigo-950 border border-indigo-800">
                       CALICO CNI
                     </span>
-                    <span className="text-[10px] font-mono text-emerald-400">eth0 (Default)</span>
+                    <span className="text-[10px] font-mono text-emerald-400">
+                      eth0 (Default)
+                    </span>
                   </div>
                   <div className="text-xs font-bold text-white">Default Primary Network</div>
                   <div className="text-[11px] text-slate-400 mt-1">
                     {language === 'zh'
-                      ? '默认主网络接口，处理 Pod-to-Pod 路由、BGP 对等与 NetworkPolicy'
-                      : 'Default primary interface, handling BGP routing, Services, & NetworkPolicy'}
+                      ? '默认主网络平面 (BGP 路由反射 + Calico IPAM + K8s NetworkPolicy 零信任隔离)'
+                      : 'Default Pod eth0 handling BGP routing, Service ClusterIP & NetworkPolicy'}
                   </div>
                 </div>
                 <div className="pt-2 border-t border-slate-800/80 text-[11px] font-mono text-slate-400">
-                  <div>Latency: ~12µs</div>
-                  <div className="text-indigo-300">BGP Peering: 4/4 Connected</div>
+                  <div>Version: {multiCNI?.calico?.version || 'v3.28.1'} • Latency {multiCNI?.calico?.latency || '~12µs'}</div>
+                  <div className="text-indigo-300">IP Pool: {multiCNI?.calico?.config?.ipPools?.[0] || '172.16.0.0/16'}</div>
                 </div>
               </div>
 
-              {/* 3. OVS */}
+              {/* 3. OVS-DPDK */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <span className="text-xs font-bold font-mono text-cyan-300 px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800">
-                      OVS CNI
+                      OVS-DPDK CNI
                     </span>
-                    <span className="text-[10px] font-mono text-cyan-400">net1 (br-data)</span>
+                    <span className="text-[10px] font-mono text-cyan-400">
+                      net1 ({multiCNI?.ovs?.config?.bridge || 'br-data'})
+                    </span>
                   </div>
-                  <div className="text-xs font-bold text-white">Open vSwitch L2 Bridge</div>
+                  <div className="text-xs font-bold text-white">Userspace netdev + vhost-user</div>
                   <div className="text-[11px] text-slate-400 mt-1">
                     {language === 'zh'
-                      ? '二层虚拟交换网桥，支持动态 802.1Q VLAN 隔离与高速二层广播域'
-                      : 'Layer 2 virtual switching bridge with dynamic VLAN trunking and isolation'}
+                      ? '基于 DPDK 轮询态 Open vSwitch 二层网桥，支持 VLAN 200 隔离与零内核拷贝交换'
+                      : 'Open vSwitch netdev DPDK vhost-user L2 bridge with VLAN 200 trunking & QoS'}
                   </div>
                 </div>
                 <div className="pt-2 border-t border-slate-800/80 text-[11px] font-mono text-slate-400">
-                  <div>Latency: ~8µs</div>
-                  <div className="text-cyan-300">Throughput: 98.4 Gbps</div>
+                  <div>Datapath: {multiCNI?.ovs?.config?.datapath_type || 'netdev'} (DPDK PMD)</div>
+                  <div className="text-cyan-300">Mode: {multiCNI?.ovs?.config?.vhost_mode || 'dpdkvhostuserclient'}</div>
                 </div>
               </div>
 
-              {/* 4. SR-IOV */}
+              {/* 4. Multi-DPDK & SR-IOV */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 flex flex-col justify-between space-y-3">
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <span className="text-xs font-bold font-mono text-amber-300 px-2 py-0.5 rounded bg-amber-950 border border-amber-800">
-                      SR-IOV CNI
+                      MULTI-DPDK / SR-IOV
                     </span>
-                    <span className="text-[10px] font-mono text-amber-400">net2 (Direct VF)</span>
+                    <span className="text-[10px] font-mono text-amber-400">net2 + net3 (VF)</span>
                   </div>
-                  <div className="text-xs font-bold text-white">Hardware VF + GPU RDMA</div>
+                  <div className="text-xs font-bold text-white">vfio-pci PMD + ConnectX-7 RDMA</div>
                   <div className="text-[11px] text-slate-400 mt-1">
                     {language === 'zh'
-                      ? '物理网卡 Virtual Function 直通，GPU Direct RDMA 零内核拷贝'
-                      : 'Mellanox ConnectX VF passthrough, kernel bypass, GPU Direct RDMA'}
+                      ? '多路物理 VF 并行绑定：net2 跑 vfio-pci DPDK 1Gi 巨页池，net3 跑 CX-7 RoCEv2 直通'
+                      : 'Dual VF planes: net2 vfio-pci DPDK 1Gi HugePages PMD & net3 ConnectX-7 RoCEv2 RDMA'}
                   </div>
                 </div>
                 <div className="pt-2 border-t border-slate-800/80 text-[11px] font-mono text-slate-400">
-                  <div>Latency: &lt; 1.2µs</div>
-                  <div className="text-amber-300">Throughput: 198.7 Gbps Line-Rate</div>
+                  <div>VF Pool: {multiCNI?.sriov?.config?.vfCount || 32} VFs ({multiCNI?.sriov?.config?.dpdk_driver || 'vfio-pci'} + mlx5)</div>
+                  <div className="text-amber-300">Line-Rate: 100G PMD + 200G RoCEv2</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Multi-DPDK & SR-IOV Plane Breakdown + Multus NADs */}
+            <div className="pt-4 border-t border-slate-800/80 grid grid-cols-1 lg:grid-cols-12 gap-4">
+              <div className="lg:col-span-7 space-y-2">
+                <div className="text-xs font-bold text-slate-200 flex items-center justify-between">
+                  <span>
+                    {language === 'zh'
+                      ? '多路 DPDK / SR-IOV 高速用户态数据平面'
+                      : 'Active Multi-DPDK & SR-IOV High-Speed Planes'}
+                  </span>
+                  <span className="text-[10px] font-mono text-amber-300">HugePages 1Gi Enabled</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {(multiCNI?.dpdk_planes || [
+                    { name: 'Plane 1: OVS-DPDK vhost-user Bridge', version: 'OVS 2.17 + DPDK 24.11', interface: 'net1 (br-data / vhost-user0)', latency: '3.2µs', throughput: '100Gbps Userspace Switch', config: { driver: 'dpdkvhostuserclient' }, status: 'ACTIVE' },
+                    { name: 'Plane 2: SR-IOV DPDK vfio-pci PF0', version: 'DPDK 24.11 LTS', interface: 'net2 (dpdk0 / 0000:4b:02.0)', latency: '1.8µs', throughput: '100Gbps Full-Duplex PMD', config: { driver: 'vfio-pci' }, status: 'ACTIVE' },
+                    { name: 'Plane 3: Mellanox ConnectX-7 RoCEv2 PF1', version: 'mlx5_core / OFED 24.10', interface: 'net3 (mlx5_vf1 / 0000:98:04.0)', latency: '1.15µs', throughput: '200Gbps Line-Rate RDMA', config: { driver: 'mlx5_ib' }, status: 'ACTIVE' },
+                  ]).map((plane: any, idx: number) => (
+                    <div key={idx} className="bg-slate-950/90 border border-slate-800 rounded-xl p-3 text-[11px] font-mono space-y-1">
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-bold text-amber-300 truncate">{plane.interface}</span>
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 shrink-0">
+                          {plane.status || 'ACTIVE'}
+                        </span>
+                      </div>
+                      <div className="text-white font-semibold truncate">{plane.name}</div>
+                      <div className="text-slate-400 text-[10px]">Driver: {plane.config?.driver || plane.version}</div>
+                      <div className="text-cyan-300 text-[10px] truncate">{plane.latency} • {plane.throughput}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="lg:col-span-5 space-y-2">
+                <div className="text-xs font-bold text-slate-200 flex items-center justify-between">
+                  <span>Multus NetworkAttachmentDefinitions (CRDs)</span>
+                  <span className="text-[10px] font-mono text-purple-300">k8s.cni.cncf.io/v1</span>
+                </div>
+                <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3 space-y-1.5 text-[11px] font-mono">
+                  {(multiCNI?.network_attachment_definitions || [
+                    { name: 'calico-primary', type: 'calico', cni: 'Default eth0 (BGP Routed + NetworkPolicy)' },
+                    { name: 'ovs-dpdk-vlan200', type: 'ovs-dpdk', cni: 'Secondary net1 (OVS-DPDK br-data + vhost-user, VLAN 200)' },
+                    { name: 'dpdk-sriov-vfio-pf0', type: 'sriov-dpdk', cni: 'DPDK Plane net2 (vfio-pci Userspace PMD + 1Gi HugePages)' },
+                    { name: 'sriov-rocev2-mlx5-pf1', type: 'sriov-rdma', cni: 'RDMA Plane net3 (ConnectX-7 VF RoCEv2, GPU Direct)' },
+                  ]).map((nad: any, idx: number) => (
+                    <div key={idx} className="flex items-center justify-between gap-2 text-slate-300">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0" />
+                        <span className="text-purple-300 font-semibold shrink-0">{typeof nad === 'string' ? nad : nad.name}</span>
+                        {typeof nad !== 'string' && nad.cni && (
+                          <span className="text-slate-400 text-[10px] truncate">{nad.cni}</span>
+                        )}
+                      </div>
+                      {typeof nad !== 'string' && nad.type && (
+                        <span className="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-800 text-[10px] text-cyan-300 shrink-0">
+                          {nad.type}
+                        </span>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -3064,10 +3918,10 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                       : 'Multi-CNI Real-Time Packet Benchmark Report'}
                   </span>
                 </div>
-                <span className="text-xs text-emerald-300 font-mono">All 4 Protocols Validated</span>
+                <span className="text-xs text-emerald-300 font-mono">All 5 Planes Validated (Multus + Calico + OVS-DPDK + DPDK PMD + SR-IOV)</span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs font-mono">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs font-mono">
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
                   <span className="text-slate-400 block mb-1">Multus Dispatch</span>
                   <span className="text-purple-300 font-bold">{cniTestResults.multus?.dispatch_time}</span>
@@ -3079,9 +3933,14 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   <span className="text-[10px] text-emerald-400 block mt-1">{cniTestResults.calico?.bgp_peers}</span>
                 </div>
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
-                  <span className="text-slate-400 block mb-1">OVS L2 Bridge</span>
+                  <span className="text-slate-400 block mb-1">OVS-DPDK Bridge</span>
                   <span className="text-cyan-300 font-bold">{cniTestResults.ovs?.throughput}</span>
-                  <span className="text-[10px] text-slate-400 block mt-1">VLAN {cniTestResults.ovs?.vlan_tag} Tagged</span>
+                  <span className="text-[10px] text-slate-400 block mt-1">VLAN {cniTestResults.ovs?.vlan_tag} • {cniTestResults.ovs?.datapath || 'netdev'}</span>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+                  <span className="text-slate-400 block mb-1">DPDK Userspace PMD</span>
+                  <span className="text-emerald-300 font-bold">{cniTestResults.dpdk?.throughput || '100 Gbps (148.8 Mpps)'}</span>
+                  <span className="text-[10px] text-amber-300 block mt-1">{cniTestResults.dpdk?.pmd_driver || 'vfio-pci'} • {cniTestResults.dpdk?.hugepages || '1Gi HugePages'}</span>
                 </div>
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
                   <span className="text-slate-400 block mb-1">SR-IOV RoCEv2</span>
@@ -3089,6 +3948,291 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   <span className="text-[10px] text-emerald-400 block mt-1">{cniTestResults.sriov?.gpu_direct}</span>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Interactive Packet Flow Simulator Card */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+              <div>
+                <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+                  <Radio className="w-4 h-4 text-cyan-400" />
+                  <span>
+                    {language === 'zh'
+                      ? '双网络与多 CNI 数据包链路实时仿真探针 (Go 内核驱动)'
+                      : 'Dual-Network & Multi-CNI Packet Flow Trace Engine (Go Powered)'}
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  {language === 'zh'
+                    ? '选择不同业务网络协议，由 Go 控制面实时模拟从 Pod 容器到物理网络硬件的微秒级数据包封包与选路轨迹。'
+                    : 'Select traffic profile to trace microsecond packet routing from container namespace down to physical fabric.'}
+                </p>
+              </div>
+
+              <button
+                onClick={() => handleSimulatePacketFlow()}
+                disabled={simulatingPacket}
+                className="px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center gap-2 shadow-md shadow-cyan-600/30 transition cursor-pointer shrink-0"
+              >
+                <Zap className={`w-3.5 h-3.5 ${simulatingPacket ? 'animate-spin' : ''}`} />
+                <span>{simulatingPacket ? 'Simulating...' : (language === 'zh' ? '🛰️ 模拟数据包链路轨迹' : '🛰️ Trace Packet Path')}</span>
+              </button>
+            </div>
+
+            {/* Protocol Selector Tabs */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <button
+                onClick={() => handleSimulatePacketFlow('GPU_RDMA_ROCEV2')}
+                className={`p-3.5 rounded-xl border text-left transition cursor-pointer ${
+                  packetTrafficType === 'GPU_RDMA_ROCEV2'
+                    ? 'bg-amber-950/40 border-amber-600/80 shadow-md shadow-amber-900/20'
+                    : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-amber-300 font-mono">1. SR-IOV RoCEv2</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800 font-mono">1.15µs</span>
+                </div>
+                <div className="text-[11px] text-slate-300 font-medium">GPU Direct RDMA (net3)</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">200G Wire-Rate • mlx5_core • MTU 9000</div>
+              </button>
+
+              <button
+                onClick={() => handleSimulatePacketFlow('DPDK_USERSPACE_PMD')}
+                className={`p-3.5 rounded-xl border text-left transition cursor-pointer ${
+                  packetTrafficType === 'DPDK_USERSPACE_PMD'
+                    ? 'bg-emerald-950/40 border-emerald-600/80 shadow-md shadow-emerald-900/20'
+                    : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-emerald-300 font-mono">2. DPDK Userspace PMD</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-mono">1.8µs</span>
+                </div>
+                <div className="text-[11px] text-slate-300 font-medium">SR-IOV vfio-pci (net2)</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">100G Zero-Copy PMD • 1Gi HugePages</div>
+              </button>
+
+              <button
+                onClick={() => handleSimulatePacketFlow('POD_L2_VLAN200')}
+                className={`p-3.5 rounded-xl border text-left transition cursor-pointer ${
+                  packetTrafficType === 'POD_L2_VLAN200'
+                    ? 'bg-cyan-950/40 border-cyan-600/80 shadow-md shadow-cyan-900/20'
+                    : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-cyan-300 font-mono">3. OVS-DPDK L2 Bridge</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono">8.4µs</span>
+                </div>
+                <div className="text-[11px] text-slate-300 font-medium">OVS netdev vhost (net1)</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">100G Wire-Rate • VLAN 200 • MTU 9000</div>
+              </button>
+
+              <button
+                onClick={() => handleSimulatePacketFlow('APISERVER_MGMT')}
+                className={`p-3.5 rounded-xl border text-left transition cursor-pointer ${
+                  packetTrafficType === 'APISERVER_MGMT'
+                    ? 'bg-indigo-950/40 border-indigo-600/80 shadow-md shadow-indigo-900/20'
+                    : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-indigo-300 font-mono">4. Calico Control Plane</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-400 border border-indigo-800 font-mono">82µs</span>
+                </div>
+                <div className="text-[11px] text-slate-300 font-medium">Calico Primary (eth0)</div>
+                <div className="text-[10px] text-slate-400 mt-0.5">10G Bonded • VLAN 100 • K8s VIP</div>
+              </button>
+            </div>
+
+            {/* Simulated Packet Hop Trace */}
+            {packetSimResult && (
+              <div className="space-y-4 pt-2">
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-400">Selected Path:</span>
+                    <span className="text-cyan-300 font-bold">{packetSimResult.selected_path}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-800 text-emerald-400">
+                      Total Latency: {packetSimResult.total_latency}
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-800 text-cyan-300">
+                      Wire: {packetSimResult.throughput_wire}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded font-bold ${packetSimResult.jumbo_frames ? 'bg-amber-950 border border-amber-800 text-amber-300' : 'bg-slate-800 text-slate-300'}`}>
+                      {packetSimResult.jumbo_frames ? 'Jumbo Frames MTU 9000' : 'Standard MTU 1500'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-slate-800">
+                  {packetSimResult.hops?.map((hop: any) => (
+                    <div key={hop.order} className="relative flex flex-col md:flex-row md:items-start justify-between gap-3 p-3.5 rounded-xl bg-slate-950/70 border border-slate-800/90 text-xs">
+                      <div className="absolute -left-[27px] top-3.5 w-5 h-5 rounded-full bg-cyan-950 border border-cyan-500 text-cyan-300 text-[10px] font-mono font-bold flex items-center justify-center">
+                        {hop.order}
+                      </div>
+
+                      <div className="space-y-1.5 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-white font-mono">{hop.device}</span>
+                          <span className="px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 text-[10px] font-mono">
+                            {hop.layer}
+                          </span>
+                          <span className="text-[10px] text-cyan-400 font-mono font-bold">
+                            Hop Latency: {hop.latency}
+                          </span>
+                        </div>
+                        <p className="text-slate-300 text-xs leading-relaxed">
+                          {language === 'zh' && hop.action_zh ? hop.action_zh : hop.action}
+                        </p>
+                        <div className="p-2 rounded-lg bg-black/50 border border-slate-800/70 text-[11px] font-mono text-slate-400">
+                          {hop.headers}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Go pkg/cni Reconciled State Machine Fleet Provisioning */}
+          {cniFleet && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-5">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <span className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-700 text-cyan-300 text-[10px] font-mono font-bold">
+                      pkg/cni • RECONCILED STATE MACHINE
+                    </span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      Gen #{cniFleet.desired_generation} • Cycles {cniFleet.reconcile_cycles} • Loop {cniFleet.loop_running ? 'ACTIVE' : 'READY'}
+                    </span>
+                  </div>
+                  <h3 className="text-sm font-bold text-white tracking-tight">
+                    {language === 'zh'
+                      ? 'Metal3 机群 CNI 声明式状态机与多网卡收敛监控 (Calico / Multus / SR-IOV)'
+                      : 'Metal3 Fleet CNI Reconciled State Machine (Calico / Multus / SR-IOV)'}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    {language === 'zh'
+                      ? `已收敛节点 ${cniFleet.converged_hosts}/${cniFleet.total_hosts}（漂移/降级 ${cniFleet.degraded_hosts} • 协调中 ${cniFleet.reconciling_hosts}），支持漂移检测与一步/全量收敛自愈。`
+                      : `Converged ${cniFleet.converged_hosts}/${cniFleet.total_hosts} fleet hosts (Drifted/Degraded: ${cniFleet.degraded_hosts}, Reconciling: ${cniFleet.reconciling_hosts}).`}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => handleInjectCNIDrift('bmh-worker-k8s-01', 'sriov-dpdk')}
+                    disabled={reconcilingCNI}
+                    className="px-3 py-2 rounded-xl bg-amber-950/70 hover:bg-amber-900/70 border border-amber-700/80 text-amber-300 text-xs font-semibold transition cursor-pointer"
+                  >
+                    {language === 'zh' ? '模拟 SR-IOV 接口漂移' : 'Inject SR-IOV Drift'}
+                  </button>
+                  <button
+                    onClick={() => handleReconcileCNIFleet(false)}
+                    disabled={reconcilingCNI}
+                    className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition cursor-pointer"
+                  >
+                    {language === 'zh' ? '单步 Reconcile Tick' : 'Step State Machine'}
+                  </button>
+                  <button
+                    onClick={() => handleReconcileCNIFleet(true)}
+                    disabled={reconcilingCNI}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition cursor-pointer"
+                  >
+                    {language === 'zh' ? '全机群收敛至 READY' : 'Converge Fleet'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Host State Table */}
+              <div className="overflow-x-auto max-h-72 overflow-y-auto border border-slate-800 rounded-xl bg-slate-950/60">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="sticky top-0 z-10 bg-slate-950 text-slate-400 border-b border-slate-800 text-[11px]">
+                    <tr>
+                      <th className="px-3 py-2.5">Host</th>
+                      <th className="px-3 py-2.5">Role</th>
+                      <th className="px-3 py-2.5">Phase</th>
+                      <th className="px-3 py-2.5">Bound Interfaces (Calico / OVS-DPDK / SR-IOV)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/70">
+                    {[...(cniFleet.hosts || [])]
+                      .sort((a: any, b: any) => {
+                        const rank = (p: string) =>
+                          p === 'DRIFTED' || p === 'DEGRADED'
+                            ? 0
+                            : p === 'PENDING'
+                              ? 3
+                              : p === 'READY'
+                                ? 2
+                                : 1;
+                        const diff = rank(a.overall_phase) - rank(b.overall_phase);
+                        return diff !== 0 ? diff : String(a.host_name).localeCompare(String(b.host_name));
+                      })
+                      .map((hs: any) => {
+                        const driftedPlugins = Object.values(hs.plugins || {}).filter(
+                          (p: any) => p.drifted || p.phase === 'DRIFTED' || p.phase === 'DEGRADED'
+                        );
+                        return (
+                          <tr key={hs.host_name} className="hover:bg-slate-900/50">
+                            <td className="px-3 py-2 text-white font-semibold">{hs.host_name}</td>
+                            <td className="px-3 py-2 text-slate-400">{hs.role}</td>
+                            <td className="px-3 py-2">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                  hs.overall_phase === 'READY'
+                                    ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                                    : hs.overall_phase === 'DRIFTED' || hs.overall_phase === 'DEGRADED'
+                                      ? 'bg-amber-950 text-amber-300 border-amber-700'
+                                      : 'bg-slate-900 text-slate-300 border-slate-700'
+                                }`}
+                              >
+                                {hs.overall_phase}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-[11px] text-cyan-300">
+                              <div>{(hs.interfaces || []).join(' • ') || 'Awaiting cluster assignment'}</div>
+                              {driftedPlugins.length > 0 && (
+                                <div className="text-[10px] text-amber-300 mt-0.5">
+                                  {driftedPlugins.map((p: any) => `${p.plugin} (${p.interface}): ${p.message}`).join(' | ')}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Rendered Config Artifacts Viewer */}
+              {cniFleet.rendered_artifacts && (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {Object.keys(cniFleet.rendered_artifacts).sort().map(key => (
+                      <button
+                        key={key}
+                        onClick={() => setActiveCniArtifact(key)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-mono transition cursor-pointer ${
+                          activeCniArtifact === key
+                            ? 'bg-cyan-600 text-white font-bold'
+                            : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                        }`}
+                      >
+                        {key}
+                      </button>
+                    ))}
+                  </div>
+                  <pre className="bg-slate-950 border border-slate-800 rounded-xl p-3 text-[11px] font-mono text-slate-300 max-h-56 overflow-y-auto whitespace-pre-wrap">
+                    {cniFleet.rendered_artifacts[activeCniArtifact] || ''}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -3117,11 +4261,38 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                 <p className="text-xs text-slate-300 max-w-3xl mt-1 leading-relaxed">{t.omniSubtitle}</p>
               </div>
 
-              <div className="flex items-center gap-2.5 shrink-0">
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <button
+                  onClick={handleStartOmni}
+                  disabled={omniStepping}
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <Play className={`w-3.5 h-3.5 ${omniStepping ? 'animate-spin text-amber-400' : ''}`} />
+                  <span>{language === 'zh' ? '🚀 启动单步演练' : '🚀 Start Stepper'}</span>
+                </button>
+
+                <button
+                  onClick={handleNextOmniStep}
+                  disabled={omniStepping}
+                  className="px-3.5 py-2.5 rounded-xl bg-cyan-700 hover:bg-cyan-600 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-cyan-700/30 transition cursor-pointer"
+                >
+                  <ChevronRight className={`w-3.5 h-3.5 ${omniStepping ? 'animate-spin' : ''}`} />
+                  <span>{language === 'zh' ? '⏭️ 下一步骤' : '⏭️ Next Step'}</span>
+                </button>
+
+                <button
+                  onClick={handleResetOmni}
+                  disabled={omniResetting}
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <RotateCw className={`w-3.5 h-3.5 ${omniResetting ? 'animate-spin text-cyan-400' : ''}`} />
+                  <span>{language === 'zh' ? '🔄 重置' : '🔄 Reset'}</span>
+                </button>
+
                 <button
                   onClick={handleInstantOmniDeploy}
                   disabled={omniDeploying}
-                  className="px-5 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-amber-600/30 transition cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-amber-600/30 transition cursor-pointer"
                 >
                   <Zap className={`w-4 h-4 ${omniDeploying ? 'animate-spin' : ''}`} />
                   <span>{omniDeploying ? 'Deploying Fleet...' : t.btnInstantOmniDeploy}</span>
@@ -3179,45 +4350,77 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   Total Time: {omniProgress?.elapsed_time_sec || 98}s (Sub-2-Minute Ready)
                 </span>
                 <span className="px-2.5 py-1 rounded-lg bg-indigo-950 border border-indigo-800 text-indigo-300 font-mono text-xs">
-                  {omniProgress?.progress_percent || 100}% Complete
+                  {omniProgress?.progress_percent || 100}% Complete (Step {omniProgress?.current_step_index || 7}/7)
                 </span>
               </div>
             </div>
 
             {/* Stepper Timeline List */}
             <div className="space-y-3">
-              {(omniProgress?.steps || []).map((step: any, idx: number) => (
-                <div
-                  key={step.id || idx}
-                  className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs"
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="p-1 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800 mt-0.5">
-                      <Check className="w-3.5 h-3.5" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2 font-mono">
-                        <span className="font-bold text-white">
-                          {language === 'zh' && step.name_zh ? step.name_zh : step.name}
-                        </span>
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
-                          {step.agent_source}
-                        </span>
-                      </div>
-                      <p className="text-slate-400 mt-1 leading-relaxed">{step.detail}</p>
-                    </div>
-                  </div>
+              {(omniProgress?.steps || []).map((step: any, idx: number) => {
+                const isRunning = step.status === 'RUNNING';
+                const isCompleted = step.status === 'COMPLETED';
 
-                  <div className="shrink-0 font-mono text-[11px] text-slate-400 flex md:flex-col items-end gap-1">
-                    <span className="text-emerald-400 font-bold">{((step.duration_ms || 10000) / 1000).toFixed(1)}s</span>
-                    <span className="text-[10px] text-slate-500">COMPLETED</span>
+                return (
+                  <div
+                    key={step.id || idx}
+                    className={`p-4 rounded-xl border flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs transition ${
+                      isRunning
+                        ? 'bg-amber-950/30 border-amber-500/80 shadow-md shadow-amber-900/30'
+                        : isCompleted
+                        ? 'bg-slate-950 border-slate-800/80'
+                        : 'bg-slate-950/40 border-slate-800/40 opacity-70'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={`p-1.5 rounded-full mt-0.5 ${
+                          isRunning
+                            ? 'bg-amber-900 text-amber-300 border border-amber-500 animate-pulse'
+                            : isCompleted
+                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                            : 'bg-slate-900 text-slate-500 border border-slate-800'
+                        }`}
+                      >
+                        {isRunning ? (
+                          <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : isCompleted ? (
+                          <Check className="w-3.5 h-3.5" />
+                        ) : (
+                          <Clock className="w-3.5 h-3.5" />
+                        )}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 font-mono">
+                          <span className={`font-bold ${isRunning ? 'text-amber-300' : isCompleted ? 'text-white' : 'text-slate-400'}`}>
+                            {language === 'zh' && step.name_zh ? step.name_zh : step.name}
+                          </span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400">
+                            {step.agent_source}
+                          </span>
+                          {isRunning && (
+                            <span className="text-[10px] px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-600 font-bold animate-pulse">
+                              RUNNING
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-slate-400 mt-1 leading-relaxed">{step.detail}</p>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 font-mono text-[11px] text-slate-400 flex md:flex-col items-end gap-1">
+                      <span className={`${isRunning ? 'text-amber-400 font-bold' : isCompleted ? 'text-emerald-400 font-bold' : 'text-slate-500'}`}>
+                        {((step.duration_ms || 10000) / 1000).toFixed(1)}s
+                      </span>
+                      <span className="text-[10px] text-slate-500">{step.status}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
-          {/* Declarative Manifests Suite */}
+          {/* Declarative Manifests Suite with Pure Go Validator */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-lg space-y-4">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
@@ -3229,9 +4432,17 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                 </h3>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
-                  onClick={() => handleCopyManifest(omniManifests[activeManifestKey] || '')}
+                  onClick={() => handleValidateYaml()}
+                  disabled={validatingYaml}
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-emerald-600/30 transition cursor-pointer"
+                >
+                  <ShieldCheck className={`w-3.5 h-3.5 ${validatingYaml ? 'animate-spin' : ''}`} />
+                  <span>{validatingYaml ? 'Validating...' : (language === 'zh' ? '🛡️ Go 引擎深度语义校验' : '🛡️ Validate via Go')}</span>
+                </button>
+                <button
+                  onClick={() => handleCopyManifest(manifestEditorText || omniManifests[activeManifestKey] || '')}
                   className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
                 >
                   {copiedManifest ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -3245,7 +4456,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               {Object.keys(omniManifests).map(key => (
                 <button
                   key={key}
-                  onClick={() => setActiveManifestKey(key)}
+                  onClick={() => {
+                    setActiveManifestKey(key);
+                    setManifestEditorText(omniManifests[key] || '');
+                    setManifestValidation(null);
+                  }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-mono transition cursor-pointer ${
                     activeManifestKey === key
                       ? 'bg-cyan-600 text-white font-bold'
@@ -3257,11 +4472,652 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               ))}
             </div>
 
-            {/* Code Output Block */}
-            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 overflow-x-auto">
-              <pre className="text-xs font-mono text-cyan-300 leading-relaxed">
-                {omniManifests[activeManifestKey] || '# Select a manifest above to view YAML'}
-              </pre>
+            {/* Validation Feedback Banner */}
+            {manifestValidation && (
+              <div
+                className={`p-4 rounded-xl border text-xs font-mono space-y-2 ${
+                  manifestValidation.valid
+                    ? 'bg-emerald-950/40 border-emerald-700 text-emerald-300'
+                    : 'bg-rose-950/40 border-rose-700 text-rose-300'
+                }`}
+              >
+                <div className="flex items-center justify-between font-bold">
+                  <div className="flex items-center gap-2">
+                    {manifestValidation.valid ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <AlertTriangle className="w-4 h-4 text-rose-400" />}
+                    <span>
+                      {manifestValidation.valid
+                        ? (language === 'zh' ? '✅ Go 核心语义校验通过 (Valid CRD Schema)' : '✅ Go Engine CRD Validation PASSED')
+                        : (language === 'zh' ? '❌ Go 语义校验发现异常' : '❌ Validation Failed')}
+                    </span>
+                  </div>
+                  <span className="text-[11px] opacity-80">
+                    Kind: {manifestValidation.kind} • API: {manifestValidation.api_version}
+                  </span>
+                </div>
+
+                {manifestValidation.checks_passed?.length > 0 && (
+                  <div className="space-y-1 pt-1 text-[11px] text-emerald-400">
+                    {manifestValidation.checks_passed.map((c: string, idx: number) => (
+                      <div key={idx} className="flex items-center gap-1.5">
+                        <Check className="w-3 h-3 text-emerald-400" />
+                        <span>{c}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {manifestValidation.warnings?.length > 0 && (
+                  <div className="space-y-1 pt-1 text-[11px] text-amber-300">
+                    {manifestValidation.warnings.map((w: string, idx: number) => (
+                      <div key={idx} className="flex items-center gap-1.5">
+                        <AlertCircle className="w-3 h-3 text-amber-400" />
+                        <span>{w}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {manifestValidation.errors?.length > 0 && (
+                  <div className="space-y-1 pt-1 text-[11px] text-rose-300">
+                    {manifestValidation.errors.map((e: string, idx: number) => (
+                      <div key={idx} className="flex items-center gap-1.5">
+                        <X className="w-3 h-3 text-rose-400" />
+                        <span>{e}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Editable Code Block */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 overflow-hidden">
+              <textarea
+                value={manifestEditorText || omniManifests[activeManifestKey] || ''}
+                onChange={e => setManifestEditorText(e.target.value)}
+                rows={16}
+                className="w-full bg-transparent text-xs font-mono text-cyan-300 leading-relaxed outline-none resize-y"
+                placeholder="# Declarative manifest..."
+                spellCheck={false}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* --- SUBTAB: KUBERNETES VERSION MATRIX & NODE UPGRADE SELECTOR (v1.33 ~ v1.36) --- */}
+      {/* ========================================================================= */}
+      {activeSubTab === 'versions' && (
+        <div className="space-y-6">
+          {/* Top Banner & Strategy Summary */}
+          <div className="bg-gradient-to-r from-slate-900 via-purple-950/40 to-slate-900 border border-purple-800/60 rounded-2xl p-6 relative overflow-hidden shadow-xl">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                    K8s Version Orchestration
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-950 text-emerald-300 border border-emerald-800">
+                    DRA & RoCEv2 Optimized
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-950 text-indigo-300 border border-indigo-800">
+                    Dual-Agent Handover
+                  </span>
+                </div>
+                <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+                  <Boxes className="w-6 h-6 text-purple-400" />
+                  <span>{t.k8sVersionSelectorTitle || 'Kubernetes 多版本编排矩阵与节点升级中枢 (K8s Version Matrix)'}</span>
+                </h2>
+                <p className="text-xs text-slate-300 max-w-3xl leading-relaxed">
+                  {t.k8sVersionSelectorSubtitle || '支持从长期稳定版 (LTS) 到最新超前研发版 (v1.33 ~ v1.36) 的声明式平滑灰度升级，保障 RoCEv2 与 GPU 算力无损。'}
+                </p>
+              </div>
+
+              {/* Current Fleet Quick Status & Action Pill */}
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 flex flex-col sm:flex-row items-start sm:items-center gap-4 shrink-0 font-mono text-xs">
+                <div>
+                  <div className="text-[10px] text-slate-400 mb-0.5">{language === 'zh' ? '当前集群基线版本' : 'Current Fleet Baseline'}</div>
+                  <div className="text-sm font-bold text-emerald-400 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>{activeCluster?.k8s_version || 'v1.31.2'}</span>
+                  </div>
+                </div>
+                <div className="h-8 w-px bg-slate-800 hidden sm:block" />
+                <div>
+                  <div className="text-[10px] text-slate-400 mb-0.5">{language === 'zh' ? '当前选中目标版本' : 'Selected Target Version'}</div>
+                  <div className="text-sm font-bold text-purple-300 flex items-center gap-1.5">
+                    <TrendingUp className="w-4 h-4 text-purple-400" />
+                    <span>{selectedTargetVersion}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Version Feedback Alert if any */}
+            {versionFeedback && (
+              <div className={`mt-4 p-3 rounded-lg border flex items-center justify-between text-xs font-mono ${
+                versionFeedback.type === 'success'
+                  ? 'bg-emerald-950/80 border-emerald-800 text-emerald-200'
+                  : 'bg-rose-950/80 border-rose-800 text-rose-200'
+              }`}>
+                <div className="flex items-center gap-2">
+                  {versionFeedback.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  )}
+                  <span>{versionFeedback.message}</span>
+                </div>
+                <button
+                  onClick={() => setVersionFeedback(null)}
+                  className="text-slate-400 hover:text-white ml-2 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Upgrade Controls & Policy Configurator Bar */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-indigo-400" />
+                <span className="text-xs font-bold font-mono text-white tracking-wide uppercase">
+                  {language === 'zh' ? '升级编排策略配置 (Upgrade Orchestration Policy)' : 'Upgrade Orchestration Policy'}
+                </span>
+              </div>
+
+              {/* Version Category Filter */}
+              <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-800 rounded-lg p-1 text-xs">
+                <button
+                  onClick={() => setVersionFilterCategory('all')}
+                  className={`px-3 py-1 rounded font-medium transition cursor-pointer ${
+                    versionFilterCategory === 'all' ? 'bg-purple-600 text-white font-bold' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {language === 'zh' ? '全部版本 (7)' : 'All Versions (7)'}
+                </button>
+                <button
+                  onClick={() => setVersionFilterCategory('stable')}
+                  className={`px-3 py-1 rounded font-medium transition cursor-pointer ${
+                    versionFilterCategory === 'stable' ? 'bg-purple-600 text-white font-bold' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {language === 'zh' ? '生产稳定版 (v1.33~v1.35)' : 'Production (v1.33~v1.35)'}
+                </button>
+                <button
+                  onClick={() => setVersionFilterCategory('preview')}
+                  className={`px-3 py-1 rounded font-medium transition cursor-pointer ${
+                    versionFilterCategory === 'preview' ? 'bg-purple-600 text-white font-bold' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {language === 'zh' ? '超前尝鲜 (v1.36-dev)' : 'Bleeding-Edge (v1.36-dev)'}
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+              {/* Scope Selector */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                  <span>{t.lblUpgradeScope || '升级作用域 (Scope)'}</span>
+                  <span className="text-[10px] font-mono text-purple-300">
+                    {upgradeScope === 'all'
+                      ? `${hosts.length} Nodes`
+                      : upgradeScope === 'control-plane'
+                        ? '3 Masters'
+                        : upgradeScope === 'worker-gpu'
+                          ? '8 Supernodes'
+                          : `${selectedUpgradeNodes.length} Selected`}
+                  </span>
+                </label>
+                <select
+                  value={upgradeScope}
+                  onChange={e => setUpgradeScope(e.target.value as any)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500 font-mono"
+                >
+                  <option value="all">{t.scopeAllNodes || '全量集群物理机 (全部 15 节点)'}</option>
+                  <option value="control-plane">{t.scopeControlPlaneOnly || '仅控制面节点 (HA Master 01-03)'}</option>
+                  <option value="worker-gpu">{t.scopeWorkerGPUOnly || '仅 GPU 超算工作节点 (8x H100 Supernodes)'}</option>
+                  <option value="custom">{t.scopeSelectedNodes || '自定义勾选节点'}</option>
+                </select>
+              </div>
+
+              {/* Policy Selector */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-300">
+                  {t.lblUpgradePolicy || '升级调度策略 (Upgrade Policy)'}
+                </label>
+                <select
+                  value={upgradePolicy}
+                  onChange={e => setUpgradePolicy(e.target.value as any)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500 font-mono"
+                >
+                  <option value="rolling">{t.policyRollingSafe || '安全无损滚动升级 (逐台 Cordon/Drain)'}</option>
+                  <option value="canary">{t.policyCanary || '金丝雀灰度升级 (先升级 1 台验证 60s)'}</option>
+                  <option value="batch">{t.policyBatchParallel || '并发批量升级 (每批次 2 台并行)'}</option>
+                </select>
+              </div>
+
+              {/* Drain Timeout Selector */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                  <span>Drain 超时容忍</span>
+                  <span className="text-[10px] font-mono text-cyan-400">{drainTimeout}s</span>
+                </label>
+                <select
+                  value={drainTimeout}
+                  onChange={e => setDrainTimeout(Number(e.target.value))}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-purple-500 font-mono"
+                >
+                  <option value={180}>180 秒 (快速集群驱逐)</option>
+                  <option value={300}>300 秒 (生产推荐: 5 分钟优雅驱逐)</option>
+                  <option value={600}>600 秒 (超算大显存 GPU 任务排空)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Custom Nodes multi-select toggle if custom scope */}
+            {upgradeScope === 'custom' && (
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg space-y-2">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span>{language === 'zh' ? '勾选需要升级的物理机节点:' : 'Select nodes to upgrade:'}</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setSelectedUpgradeNodes(hosts.map(h => h.name))}
+                      className="text-[11px] text-purple-400 hover:text-purple-300 underline cursor-pointer"
+                    >
+                      {language === 'zh' ? '全选' : 'Select All'}
+                    </button>
+                    <button
+                      onClick={() => setSelectedUpgradeNodes([])}
+                      className="text-[11px] text-slate-500 hover:text-slate-300 underline cursor-pointer"
+                    >
+                      {language === 'zh' ? '清空' : 'Clear'}
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 max-h-40 overflow-y-auto pr-1">
+                  {hosts.map(h => {
+                    const isChecked = selectedUpgradeNodes.includes(h.name);
+                    return (
+                      <label
+                        key={h.name}
+                        className={`flex items-center gap-2 p-2 rounded border text-xs font-mono cursor-pointer transition ${
+                          isChecked
+                            ? 'bg-purple-950/60 border-purple-700 text-purple-200'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              setSelectedUpgradeNodes([...selectedUpgradeNodes, h.name]);
+                            } else {
+                              setSelectedUpgradeNodes(selectedUpgradeNodes.filter(n => n !== h.name));
+                            }
+                          }}
+                          className="accent-purple-500"
+                        />
+                        <span className="truncate">{h.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Primary Action Button */}
+            <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-slate-800">
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>
+                  {language === 'zh'
+                    ? 'AI Agent 将自动保障 Etcd 3/3 法定仲裁，RoCEv2 MTU 9000 专网链路热切无断流。'
+                    : 'AI Agent guarantees Etcd 3/3 quorum and non-disruptive RoCEv2 MTU 9000 link state.'}
+                </span>
+              </div>
+
+              <button
+                onClick={() => handleApplyVersionToFleet()}
+                disabled={isApplyingVersion}
+                className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold shadow-lg shadow-purple-600/30 flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-60"
+              >
+                {isApplyingVersion ? (
+                  <RotateCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Zap className="w-4 h-4 text-amber-300" />
+                )}
+                <span>{t.btnApplyK8sVersion || '🚀 立即应用版本升级 (Apply Version Upgrade)'}</span>
+                <span className="px-1.5 py-0.2 rounded bg-purple-950 text-purple-200 text-[10px] font-mono">
+                  {selectedTargetVersion}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Live Upgrade Progress Drawer / Simulator */}
+          {upgradeProgress && (
+            <div className="bg-slate-900 border border-purple-800/80 rounded-2xl p-5 space-y-4 shadow-xl bg-gradient-to-b from-purple-950/20 via-slate-900 to-slate-900">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-purple-600 flex items-center justify-center text-white">
+                    <TrendingUp className="w-4 h-4 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+                      <span>{t.upgradeModalTitle || 'Kubernetes 节点版本无损滚动升级中枢'}</span>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-900 text-purple-200 border border-purple-700">
+                        Target: {upgradeProgress.target_version}
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-slate-400">
+                      {upgradeProgress.message}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="text-right font-mono">
+                  <span className="text-xs text-purple-300 font-bold block">
+                    {Math.min(upgradeProgress.active_step || 1, 5)}/5 Steps
+                  </span>
+                  <span className="text-[10px] text-slate-500">
+                    Policy: {upgradeProgress.policy}
+                  </span>
+                </div>
+              </div>
+
+              {/* Progress Steps Flow */}
+              <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 pt-2">
+                {[
+                  { step: 1, title: language === 'zh' ? 'Etcd 法定仲裁检查' : 'Etcd Quorum Check', desc: 'Pre-flight' },
+                  { step: 2, title: language === 'zh' ? 'Cordon & Drain 驱逐' : 'Cordon & Pod Drain', desc: 'Pod Eviction' },
+                  { step: 3, title: language === 'zh' ? 'Talos 内核与 K8s 镜像流' : 'Stream Kernel & K8s', desc: 'Talos Pivot' },
+                  { step: 4, title: language === 'zh' ? 'Kubelet 启动与 RoCEv2' : 'Kubelet & RoCEv2 Check', desc: 'Fabric Handshake' },
+                  { step: 5, title: language === 'zh' ? 'Uncordon 恢复流量' : 'Uncordon Traffic', desc: 'Ready & Healthy' },
+                ].map(s => {
+                  const isCurrent = upgradeProgress.active_step === s.step;
+                  const isDone = upgradeProgress.active_step > s.step;
+                  return (
+                    <div
+                      key={s.step}
+                      className={`p-2.5 rounded-xl border text-xs transition ${
+                        isCurrent
+                          ? 'bg-purple-950/80 border-purple-500 shadow-md shadow-purple-950/40 text-purple-200'
+                          : isDone
+                            ? 'bg-emerald-950/40 border-emerald-800 text-emerald-300'
+                            : 'bg-slate-950 border-slate-800 text-slate-500'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] font-mono font-bold">STEP 0{s.step}</span>
+                        {isDone ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : isCurrent ? (
+                          <RotateCw className="w-3.5 h-3.5 text-purple-400 animate-spin" />
+                        ) : (
+                          <Clock className="w-3.5 h-3.5 text-slate-600" />
+                        )}
+                      </div>
+                      <div className="font-semibold text-[11px] truncate">{s.title}</div>
+                      <div className="text-[10px] text-slate-400">{s.desc}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Upgraded nodes summary pill list */}
+              {upgradeProgress.target_nodes && upgradeProgress.target_nodes.length > 0 && (
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-slate-400 font-mono">Upgraded Nodes:</span>
+                  {upgradeProgress.target_nodes.map((nodeName: string) => (
+                    <span
+                      key={nodeName}
+                      className="px-2 py-0.5 rounded text-[10px] font-mono bg-purple-950 text-purple-200 border border-purple-800 flex items-center gap-1"
+                    >
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                      {nodeName} ({upgradeProgress.target_version})
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Supported Kubernetes Versions Matrix (v1.33 ~ v1.36) Cards */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Boxes className="w-4 h-4 text-purple-400" />
+                <h3 className="text-sm font-bold text-white tracking-wide uppercase font-mono">
+                  {language === 'zh' ? '支持的 Kubernetes 版本列表 (点击卡片即可设为目标升级版本)' : 'Supported Kubernetes Versions (Click Card to Select)'}
+                </h3>
+              </div>
+              <span className="text-xs font-mono text-slate-400">
+                {k8sVersions.length} Versions Matrix
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {k8sVersions
+                .filter(ver => {
+                  if (versionFilterCategory === 'stable') return ver.channel === 'STABLE' || ver.channel === 'LATEST' || ver.channel === 'LTS';
+                  if (versionFilterCategory === 'preview') return ver.channel === 'PREVIEW';
+                  return true;
+                })
+                .map(ver => {
+                  const isSelected = selectedTargetVersion === ver.version;
+                  const isCurrentBaseline = activeCluster?.k8s_version === ver.version;
+
+                  const badgeColor =
+                    ver.badge_color === 'purple'
+                      ? 'bg-purple-950 text-purple-300 border-purple-700'
+                      : ver.badge_color === 'emerald'
+                        ? 'bg-emerald-950 text-emerald-300 border-emerald-700'
+                        : ver.badge_color === 'blue'
+                          ? 'bg-blue-950 text-blue-300 border-blue-700'
+                          : ver.badge_color === 'cyan'
+                            ? 'bg-cyan-950 text-cyan-300 border-cyan-700'
+                            : 'bg-amber-950 text-amber-300 border-amber-700';
+
+                  const featuresList = language === 'zh' ? (ver.features_zh || ver.features_en || []) : (ver.features_en || ver.features_zh || []);
+
+                  return (
+                    <div
+                      key={ver.version}
+                      onClick={() => setSelectedTargetVersion(ver.version)}
+                      className={`border rounded-2xl p-5 transition-all cursor-pointer flex flex-col justify-between relative overflow-hidden ${
+                        isSelected
+                          ? 'bg-slate-900 border-purple-500 shadow-xl shadow-purple-950/40 ring-2 ring-purple-500/50'
+                          : 'bg-slate-900/90 border-slate-800 hover:border-slate-700 hover:bg-slate-900'
+                      }`}
+                    >
+                      {/* Top selection indicator */}
+                      <div className="flex items-start justify-between gap-3 mb-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg font-bold font-mono text-white tracking-tight">
+                              {ver.version}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold border ${badgeColor}`}>
+                              {language === 'zh' ? ver.status_zh : ver.status}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-0.5">
+                            Release: <span className="text-slate-300 font-mono">{ver.release_date}</span>
+                          </div>
+                        </div>
+
+                        {/* Radio selection check */}
+                        <div className={`w-5 h-5 rounded-full border flex items-center justify-center shrink-0 ${
+                          isSelected ? 'bg-purple-600 border-purple-500 text-white' : 'border-slate-700 bg-slate-950'
+                        }`}>
+                          {isSelected && <Check className="w-3 h-3 stroke-[3]" />}
+                        </div>
+                      </div>
+
+                      {/* Hardware / Runtime Compatibility Details */}
+                      <div className="bg-slate-950 border border-slate-800/80 rounded-xl p-3 mb-3 space-y-2 text-xs font-mono">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">{t.lblDRAEngine || 'DRA 动态分配:'}</span>
+                          <span className="text-cyan-300 font-bold truncate max-w-[160px] text-right">{ver.dra_version}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">{t.lblRoCEOptimization || 'RoCEv2 优化:'}</span>
+                          <span className="text-emerald-400 font-bold">
+                            {ver.roce_optimized ? (language === 'zh' ? '已优化 (200G RDMA)' : 'Optimized (200G RDMA)') : 'Standard TCP'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">{t.lblTalosBase || '最低 Talos:'}</span>
+                          <span className="text-purple-300 font-bold">{ver.talos_linux}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-400">{t.lblContainerRuntime || 'Containerd:'}</span>
+                          <span className="text-slate-300">{ver.containerd_version}</span>
+                        </div>
+                      </div>
+
+                      {/* Feature Highlights */}
+                      <div className="space-y-1.5 mb-4">
+                        <span className="text-[10px] text-slate-400 font-semibold tracking-wide uppercase block">
+                          {t.versionFeaturesTitle || '关键特性与超算优化'}
+                        </span>
+                        <ul className="space-y-1 text-[11px] text-slate-300">
+                          {featuresList.map((feat, idx) => (
+                            <li key={idx} className="flex items-start gap-1.5">
+                              <span className="text-purple-400 font-bold">›</span>
+                              <span>{feat}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* Bottom Quick Apply Action */}
+                      <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+                        {isCurrentBaseline ? (
+                          <span className="text-xs text-emerald-400 font-mono font-semibold flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            {language === 'zh' ? '当前集群基线版本' : 'Current Baseline'}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 font-mono">
+                            {ver.recommended_for}
+                          </span>
+                        )}
+
+                        <button
+                          onClick={e => {
+                            e.stopPropagation();
+                            setSelectedTargetVersion(ver.version);
+                            handleApplyVersionToFleet(ver.version);
+                          }}
+                          disabled={isApplyingVersion}
+                          className={`px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer flex items-center gap-1 ${
+                            isSelected
+                              ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-md'
+                              : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                          }`}
+                        >
+                          <Zap className="w-3 h-3 text-amber-300" />
+                          <span>{language === 'zh' ? '立即应用此版本' : 'Apply Version'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+
+          {/* Fleet Node Matrix Table (Every Node's Current Version & Quick Apply) */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden space-y-0">
+            <div className="bg-slate-950 px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Server className="w-4 h-4 text-purple-400" />
+                <span className="text-xs font-bold font-mono text-white tracking-wide uppercase">
+                  {language === 'zh' ? '物理机节点版本状态明细矩阵 (Fleet Node Version Status)' : 'Fleet Node Version Status Matrix'}
+                </span>
+              </div>
+              <span className="text-xs font-mono text-slate-400">
+                {hosts.length} BareMetal Nodes
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="bg-slate-950/60 border-b border-slate-800 text-slate-400">
+                  <tr>
+                    <th className="py-2.5 px-4">NODE NAME</th>
+                    <th className="py-2.5 px-3">ROLE</th>
+                    <th className="py-2.5 px-3">CURRENT K8S</th>
+                    <th className="py-2.5 px-3">DRA / ROCEV2</th>
+                    <th className="py-2.5 px-3">UPGRADE STATUS</th>
+                    <th className="py-2.5 px-4 text-right">ACTION</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/80">
+                  {hosts.map(h => {
+                    const isGpu = h.assigned_role === 'worker-gpu';
+                    const isMaster = h.assigned_role === 'control-plane';
+                    return (
+                      <tr key={h.name} className="hover:bg-slate-800/40 transition">
+                        <td className="py-2.5 px-4">
+                          <span className="font-bold text-white block">{h.name}</span>
+                          <span className="text-[10px] text-slate-400 font-sans">{h.rack_location}</span>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-sans font-medium border ${
+                            isMaster
+                              ? 'bg-purple-950 text-purple-300 border-purple-800'
+                              : isGpu
+                                ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                                : 'bg-blue-950 text-blue-300 border-blue-800'
+                          }`}>
+                            {h.assigned_role}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-950 text-purple-300 border border-purple-800">
+                            {h.k8s_version || 'v1.31.2'}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-300">
+                          {isGpu ? (
+                            <span className="text-emerald-400 font-medium">8x H100 (RoCEv2 200G)</span>
+                          ) : (
+                            <span className="text-slate-500">Standard CPU (100G)</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            h.upgrade_status === 'HEALTHY_VERIFIED'
+                              ? 'bg-emerald-950 text-emerald-300'
+                              : h.upgrade_status && h.upgrade_status !== 'IDLE'
+                                ? 'bg-amber-950 text-amber-300 animate-pulse'
+                                : 'bg-slate-800 text-slate-400'
+                          }`}>
+                            {h.upgrade_status || 'IDLE'}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-4 text-right">
+                          <button
+                            onClick={() => handleApplyVersionToSingleNode(h.name)}
+                            disabled={isApplyingVersion}
+                            className="px-2.5 py-1 rounded bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800 text-xs font-sans transition cursor-pointer"
+                            title={`Apply ${selectedTargetVersion} to ${h.name}`}
+                          >
+                            {language === 'zh' ? `应用 ${selectedTargetVersion}` : `Apply ${selectedTargetVersion}`}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -3407,11 +5263,55 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   ))}
                 </div>
               </div>
+              {/* Real-time Redfish Telemetry Panel (Pure Go Engine) */}
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Radio className="w-4 h-4 text-cyan-400" />
+                    <span className="text-xs font-bold font-mono text-white">
+                      {language === 'zh' ? 'Redfish 深度物理硬件遥测 (Go 控制面直通)' : 'Redfish Deep Hardware Telemetry (Go Direct)'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleFetchHostTelemetry(selectedHost.name)}
+                    disabled={fetchingTelemetry}
+                    className="px-2.5 py-1 rounded bg-cyan-950 border border-cyan-800 hover:bg-cyan-900 text-cyan-300 text-[11px] font-mono flex items-center gap-1.5 transition cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${fetchingTelemetry ? 'animate-spin' : ''}`} />
+                    <span>{fetchingTelemetry ? 'Querying...' : (language === 'zh' ? '探针轮询' : 'Probe')}</span>
+                  </button>
+                </div>
+
+                {hostTelemetry ? (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono pt-1">
+                    <div className="p-2.5 rounded-lg bg-black/40 border border-slate-800/80">
+                      <span className="text-[10px] text-slate-500 block">PCIe Link Speed</span>
+                      <span className="text-cyan-300 font-bold">{hostTelemetry.pcie_link_speed}</span>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-black/40 border border-slate-800/80">
+                      <span className="text-[10px] text-slate-500 block">PSU Efficiency</span>
+                      <span className="text-emerald-400 font-bold">{hostTelemetry.psu_efficiency}</span>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-black/40 border border-slate-800/80">
+                      <span className="text-[10px] text-slate-500 block">NVLink Bandwidth</span>
+                      <span className="text-amber-300 font-bold">{hostTelemetry.nvlink_bandwidth}</span>
+                    </div>
+                    <div className="p-2.5 rounded-lg bg-black/40 border border-slate-800/80">
+                      <span className="text-[10px] text-slate-500 block">RoCEv2 GID</span>
+                      <span className="text-indigo-300 font-bold text-[10px] truncate block">{hostTelemetry.roce_gid}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-slate-400 font-mono py-1">
+                    {language === 'zh' ? '点击“探针轮询”获取实时 PCIe Gen5、PSU 钛金能效与 NVLink 带宽状态。' : 'Click "Probe" to query live PCIe Gen5, 80 PLUS Titanium PSU, and NVLink bus status.'}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Modal Footer */}
-            <div className="bg-slate-950 px-6 py-3 border-t border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2">
+            <div className="bg-slate-950 px-6 py-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => {
                     handlePowerAction(selectedHost.name, selectedHost.power_status === 'ON' ? 'off' : 'on');
@@ -3432,6 +5332,13 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                 >
                   Trigger Inspection
                 </button>
+                <button
+                  onClick={() => handleReprovisionHost(selectedHost.name)}
+                  disabled={reprovisioningHost}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-950 hover:bg-indigo-900 border border-indigo-700 text-indigo-300 text-xs font-semibold cursor-pointer"
+                >
+                  {reprovisioningHost ? 'Provisioning...' : (language === 'zh' ? '🔄 触发带外重镜像' : '🔄 Reprovision Host')}
+                </button>
                 {selectedHost.provisioning_status === 'ActiveInCluster' && selectedHost.assigned_role !== 'control-plane' && (
                   <button
                     onClick={() => {
@@ -3447,7 +5354,10 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               </div>
 
               <button
-                onClick={() => setSelectedHost(null)}
+                onClick={() => {
+                  setSelectedHost(null);
+                  setHostTelemetry(null);
+                }}
                 className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs text-white font-semibold cursor-pointer"
               >
                 {t.btnClose}
@@ -3489,7 +5399,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs font-mono flex items-center justify-between">
                 <span className="text-slate-400">{language === 'zh' ? '当前运行规模:' : 'Current Scale:'}</span>
                 <span className="text-white font-bold">
-                  {activeCluster.scale.control_plane_nodes} Masters + {activeCluster.scale.worker_nodes} Workers ({activeCluster.scale.gpu_nodes} GPUs)
+                  {activeCluster?.scale?.control_plane_nodes ?? activeCluster?.control_plane_nodes ?? 3} Masters + {activeCluster?.scale?.worker_nodes ?? activeCluster?.worker_nodes ?? 7} Workers ({activeCluster?.scale?.gpu_nodes ?? activeCluster?.worker_nodes ?? 7} GPUs)
                 </span>
               </div>
 
@@ -3541,15 +5451,15 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
               <div className="p-3 rounded-lg border bg-slate-950/70 border-slate-800 text-xs">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-slate-400">{language === 'zh' ? '扩缩容变动:' : 'Scale Delta:'}</span>
-                  {scaleTargetWorkers > activeCluster.scale.worker_nodes ? (
+                  {scaleTargetWorkers > (activeCluster?.scale?.worker_nodes ?? activeCluster?.worker_nodes ?? 7) ? (
                     <span className="font-mono font-bold text-cyan-400 flex items-center gap-1">
                       <ArrowUpCircle className="w-3.5 h-3.5" />
-                      +{scaleTargetWorkers - activeCluster.scale.worker_nodes} Workers (Scale-Up)
+                      +{scaleTargetWorkers - (activeCluster?.scale?.worker_nodes ?? activeCluster?.worker_nodes ?? 7)} Workers (Scale-Up)
                     </span>
-                  ) : scaleTargetWorkers < activeCluster.scale.worker_nodes ? (
+                  ) : scaleTargetWorkers < (activeCluster?.scale?.worker_nodes ?? activeCluster?.worker_nodes ?? 7) ? (
                     <span className="font-mono font-bold text-amber-400 flex items-center gap-1">
                       <ArrowDownCircle className="w-3.5 h-3.5" />
-                      -{activeCluster.scale.worker_nodes - scaleTargetWorkers} Workers (Scale-Down)
+                      -{(activeCluster?.scale?.worker_nodes ?? activeCluster?.worker_nodes ?? 7) - scaleTargetWorkers} Workers (Scale-Down)
                     </span>
                   ) : (
                     <span className="font-mono text-slate-400">No Scale Change</span>
@@ -3559,7 +5469,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   <div className="font-semibold text-slate-300">
                     {t.scaleFlowTitle}
                   </div>
-                  {scaleTargetWorkers >= activeCluster.scale.worker_nodes ? (
+                  {scaleTargetWorkers >= (activeCluster?.scale?.worker_nodes ?? activeCluster?.worker_nodes ?? 7) ? (
                     <>
                       <div>{t.scaleUpStep1}</div>
                       <div>{t.scaleUpStep2}</div>
@@ -3640,23 +5550,50 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   <select
                     value={upgradeTargetVersion}
                     onChange={e => setUpgradeTargetVersion(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-bold text-purple-300 focus:outline-none"
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-bold text-purple-300 focus:outline-none font-mono"
                   >
-                    {availableUpgradeVersions.map(version => (
-                      <option key={version} value={version}>
-                        {version.replace(/\.0$/, '')} ({language === 'zh' ? '支持版本' : 'Supported'})
+                    {k8sVersions.map(v => (
+                      <option key={v.version} value={v.version}>
+                        {v.version} ({language === 'zh' ? v.status_zh : v.status})
                       </option>
                     ))}
                   </select>
                 </div>
               </div>
-              {availableUpgradeVersions.length === 0 && (
-                <p className="text-xs text-amber-400">
-                  {language === 'zh'
-                    ? '当前集群已处于最高支持版本，没有可用的升级目标。'
-                    : 'The cluster is already at the highest supported version. No upgrade target is available.'}
-                </p>
-              )}
+
+              {/* Policy Selector in Modal */}
+              <div className="grid grid-cols-2 gap-3 text-xs font-mono">
+                <div className="bg-slate-950 border border-slate-800 rounded-lg p-3">
+                  <span className="text-[10px] text-slate-500 block mb-1">
+                    {t.lblUpgradePolicy || '升级策略'}
+                  </span>
+                  <select
+                    value={upgradePolicy}
+                    onChange={e => setUpgradePolicy(e.target.value as any)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-semibold text-slate-200 focus:outline-none"
+                  >
+                    <option value="rolling">Safe Rolling (逐台)</option>
+                    <option value="canary">Canary Rollout (金丝雀)</option>
+                    <option value="batch">Batch Parallel (并发2台)</option>
+                  </select>
+                </div>
+
+                <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-500 block mb-1">
+                    {language === 'zh' ? '全矩阵编排' : 'Full Matrix'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUpgradeModal(false);
+                      setActiveSubTab('versions');
+                    }}
+                    className="text-xs text-purple-400 hover:text-purple-300 underline text-left font-sans cursor-pointer"
+                  >
+                    {language === 'zh' ? '打开多版本编排矩阵 ↗' : 'Open Matrix Hub ↗'}
+                  </button>
+                </div>
+              </div>
 
               {/* Pre-flight Checks */}
               <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs space-y-2">
@@ -3670,7 +5607,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   </div>
                   <div className="flex items-center gap-1.5 text-emerald-400">
                     <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                    <span>Cilium eBPF CNI v1.16 host-routing compatible with target API server</span>
+                    <span>Multus v4.1 + Calico v3.28 + OVS-DPDK + Multi-SR-IOV/DPDK CNI compatible with target API server</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-emerald-400">
                     <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
@@ -3699,7 +5636,7 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                 </button>
                 <button
                   type="submit"
-                  disabled={upgradingCluster || !availableUpgradeVersions.includes(upgradeTargetVersion as typeof SUPPORTED_KUBERNETES_VERSIONS[number])}
+                  disabled={upgradingCluster}
                   className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold flex items-center gap-2 cursor-pointer shadow-lg shadow-purple-600/30"
                 >
                   {upgradingCluster ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
@@ -3760,8 +5697,11 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                     onChange={e => setNewClusterK8sVer(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
                   >
-                    <option value="v1.31.2">v1.31.2 (Stable Production)</option>
-                    <option value="v1.30.5">v1.30.5 (Enterprise LTS)</option>
+                    {k8sVersions.map(v => (
+                      <option key={v.version} value={v.version}>
+                        {v.version} ({language === 'zh' ? v.status_zh : v.status})
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -3771,11 +5711,13 @@ export const Metal3FleetView: React.FC<Metal3FleetViewProps> = ({ currentPrincip
                   </label>
                   <select
                     value={newClusterCNI}
-                    onChange={e => setNewClusterCNI(e.target.value as any)}
+                    onChange={e => setNewClusterCNI(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-indigo-500"
                   >
-                    <option value="Cilium eBPF (RoCEv2 + BGP mesh)">Cilium eBPF (RoCEv2 + BGP mesh)</option>
-                    <option value="Calico BGP">Calico BGP Overlay</option>
+                    <option value="Multus + Calico + OVS-DPDK + Multi-SR-IOV/DPDK">Multus + Calico + OVS-DPDK + Multi-SR-IOV/DPDK</option>
+                    <option value="Multus + Calico + OVS-DPDK">Multus + Calico + OVS-DPDK</option>
+                    <option value="Multus + Calico + Dual-SR-IOV (PF0 DPDK + PF1 RoCEv2)">Multus + Calico + Dual-SR-IOV (PF0 DPDK + PF1 RoCEv2)</option>
+                    <option value="Calico BGP Overlay">Calico BGP Overlay</option>
                   </select>
                 </div>
               </div>

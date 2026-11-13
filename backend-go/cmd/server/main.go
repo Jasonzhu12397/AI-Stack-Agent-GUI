@@ -44,26 +44,27 @@ func main() {
 	log.Printf("[AI AGENT STUDIO] Initializing 100%% Golang Production Backend...")
 	log.Printf("[AI AGENT STUDIO] Go Runtime: %s on %s/%s (GOMAXPROCS=%d)", runtime.Version(), runtime.GOOS, runtime.GOARCH, runtime.GOMAXPROCS(0))
 
-	// 1. Initialize Domain Singletons
+	// 1. Initialize Domain Singletons & Background VersionController
 	memStore := store.NewStore()
 	m3Engine := metal3.NewEngine()
 	connRegistry := connectors.NewRegistry()
 
-	// 2. Build Server and Register All 48+ RESTful Endpoints
+	ctrlCtx, ctrlCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer ctrlCancel()
+	m3Engine.StartController(ctrlCtx)
+
+	// 2. Build Server and Register All RESTful Endpoints
 	srv := api.NewServer(memStore, m3Engine, connRegistry)
 
 	httpServer := &http.Server{
 		Addr:         ":" + port,
-		Handler:      securityMiddleware(srv.Mux),
+		Handler:      securityMiddleware(srv.Handler()),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
 	// 3. Graceful Shutdown listener
-	shutdownChan := make(chan os.Signal, 1)
-	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM)
-
 	go func() {
 		log.Printf("[AI AGENT STUDIO GO CONTROL PLANE] Listening and serving at http://0.0.0.0:%s", port)
 		log.Printf("[AI AGENT STUDIO GO CONTROL PLANE] Health check: http://0.0.0.0:%s/api/v1/health", port)
@@ -72,7 +73,7 @@ func main() {
 		}
 	}()
 
-	<-shutdownChan
+	<-ctrlCtx.Done()
 	log.Println("[AI AGENT STUDIO] Gracefully shutting down Go backend...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

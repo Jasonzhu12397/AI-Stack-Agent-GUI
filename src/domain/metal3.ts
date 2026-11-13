@@ -3,23 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export const SUPPORTED_KUBERNETES_VERSIONS = ['v1.33.0', 'v1.35.0', 'v1.36.0'] as const;
-export type SupportedKubernetesVersion = (typeof SUPPORTED_KUBERNETES_VERSIONS)[number];
-
-export const isKubernetesVersionUpgrade = (targetVersion: string, currentVersion: string): boolean => {
-  const parseVersion = (version: string) => version.replace(/^v/, '').split('.').map(part => Number.parseInt(part, 10) || 0);
-  const target = parseVersion(targetVersion);
-  const current = parseVersion(currentVersion);
-
-  for (let index = 0; index < Math.max(target.length, current.length); index += 1) {
-    const targetPart = target[index] || 0;
-    const currentPart = current[index] || 0;
-    if (targetPart !== currentPart) return targetPart > currentPart;
-  }
-
-  return false;
-};
-
 export type PowerStatus = 'ON' | 'OFF' | 'REBOOTING' | 'PXE_BOOTING' | 'UNKNOWN';
 
 export type ProvisioningStatus =
@@ -151,6 +134,240 @@ export interface BareMetalHostIpAddresses {
   target_ip: string;
 }
 
+export interface SupportedK8sVersion {
+  id: string;
+  version: string;
+  major_minor: string;
+  display_name: string;
+  display_name_zh: string;
+  channel: 'PREVIEW' | 'LATEST' | 'STABLE' | 'LTS' | 'MAINTENANCE';
+  release_date: string;
+  status: string;
+  status_zh: string;
+  badge_color: string;
+  talos_linux: string;
+  containerd_version: string;
+  roce_optimized: boolean;
+  dra_version: string;
+  description_en: string;
+  description_zh: string;
+  features_zh: string[];
+  features_en: string[];
+  recommended_for: string;
+}
+
+export const SUPPORTED_K8S_VERSIONS: SupportedK8sVersion[] = [
+  {
+    id: 'v1.36.0-dev',
+    version: 'v1.36.0-dev',
+    major_minor: 'v1.36',
+    display_name: 'Kubernetes v1.36 (Bleeding-Edge / 2026 Q4)',
+    display_name_zh: 'Kubernetes v1.36 (超前研发预览版 / 2026 Q4)',
+    channel: 'PREVIEW',
+    release_date: '2026-10-15',
+    status: 'Bleeding Edge',
+    status_zh: '超前尝鲜',
+    badge_color: 'purple',
+    talos_linux: 'v1.9.0-alpha',
+    containerd_version: 'v2.1.0-beta.1',
+    roce_optimized: true,
+    dra_version: 'DRA v2 Native Multi-Tenant',
+    description_en: 'Cutting-edge AI supercomputing kernel, native hardware RoCEv2 Direct fabric NUMA pinning, zero-overhead in-pod cgroup v2 tiering, and sub-millisecond pod startup.',
+    description_zh: '前沿 AI 超算原生架构，深度支持 RoCEv2 Direct 织网 NUMA 感知、动态硬件资源分配 (DRA v2) 与低至微秒级的 Pod 瞬时初始化。',
+    features_zh: [
+      'DRA v2 原生多租户 GPU 切分与动态隔离',
+      'RoCEv2 200Gbps 直通与网卡级 NUMA 亲和调度',
+      '全新 Linux 6.12+ eBPF 零开销转发与加密隧道',
+      '原生支持大模型推演容器零拷贝内存预热'
+    ],
+    features_en: [
+      'DRA v2 Native Multi-tenant GPU partitioning & dynamic slicing',
+      'RoCEv2 200Gbps Direct & NIC-level NUMA affinity scheduler',
+      'Linux 6.12+ eBPF zero-overhead dataplane & TLS offload',
+      'Zero-copy memory pre-warming for LLM inference containers'
+    ],
+    recommended_for: 'Next-Gen AI Labs, Multi-Pod H100/B200 Clusters, Autonomous Research'
+  },
+  {
+    id: 'v1.35.0',
+    version: 'v1.35.0',
+    major_minor: 'v1.35',
+    display_name: 'Kubernetes v1.35 (Production Bleeding Edge / 2026 Q2)',
+    display_name_zh: 'Kubernetes v1.35 (最新生产级推荐 / 2026 Q2)',
+    channel: 'LATEST',
+    release_date: '2026-04-18',
+    status: 'Production Ready',
+    status_zh: '最新生产级',
+    badge_color: 'emerald',
+    talos_linux: 'v1.8.4',
+    containerd_version: 'v2.0.2',
+    roce_optimized: true,
+    dra_version: 'DRA v2 GA',
+    description_en: 'Production-hardened GPU Supernode release with Dynamic Resource Allocation GA, Topology-aware GPU scheduling, and Multi-Subnet Pod IPAM v2.',
+    description_zh: '面向生产级智算中心的黄金推荐版本，Dynamic Resource Allocation GA，原生多拓扑 GPU 编排，支持跨机架无损 RoCEv2 互联。',
+    features_zh: [
+      'Dynamic Resource Allocation (DRA) 正式 GA',
+      '拓扑感知 GPU 调度（NVLink 全互联优先对齐）',
+      '多网卡 Multus v4.1 与 SR-IOV 硬件直通深度优化',
+      'Kubelet 内存 QoS cgroup v2 精准降级保护'
+    ],
+    features_en: [
+      'Dynamic Resource Allocation (DRA) officially GA',
+      'Topology-aware GPU scheduling with NVLink full-mesh priority',
+      'Deep optimization for Multus v4.1 & SR-IOV hardware passthrough',
+      'Kubelet memory QoS cgroup v2 precision eviction guard'
+    ],
+    recommended_for: 'Production Enterprise GPU Clusters, Multi-Node Distributed Training'
+  },
+  {
+    id: 'v1.34.1',
+    version: 'v1.34.1',
+    major_minor: 'v1.34',
+    display_name: 'Kubernetes v1.34 (Enterprise Stable / 2025 Q4)',
+    display_name_zh: 'Kubernetes v1.34 (企业稳定版 / 2025 Q4)',
+    channel: 'STABLE',
+    release_date: '2025-11-20',
+    status: 'Enterprise Stable',
+    status_zh: '企业稳定版',
+    badge_color: 'cyan',
+    talos_linux: 'v1.8.2',
+    containerd_version: 'v2.0.0',
+    roce_optimized: true,
+    dra_version: 'In-Place GPU Resize GA',
+    description_en: 'Rock-solid enterprise stability featuring In-Place Pod Resource & GPU Resize GA, Structured Authorization, and VolumeAttributesClass.',
+    description_zh: '工业级稳健版本，正式支持 Pod 在线无重启热扩容 (In-Place Resize)、结构化 RBAC 授权与多租户存储规格动态适配。',
+    features_zh: [
+      'Pod 资源与 GPU 算力在线无重启热扩缩 (In-Place Resize)',
+      '结构化鉴权策略引擎（Structured Authorization）',
+      'mTLS 1.3 严格控制面双向握手防重放',
+      '高密度节点挂载延迟降低 45%'
+    ],
+    features_en: [
+      'In-Place Pod Resource & GPU compute resize without restart',
+      'Structured Authorization policy engine for Zero-Trust',
+      'mTLS 1.3 strict control plane bi-directional handshake',
+      'High-density node mount latency reduced by 45%'
+    ],
+    recommended_for: 'Financial Cloud, Mission-Critical Enterprise Production'
+  },
+  {
+    id: 'v1.33.2',
+    version: 'v1.33.2',
+    major_minor: 'v1.33',
+    display_name: 'Kubernetes v1.33 (Production LTS / 2025 Q2)',
+    display_name_zh: 'Kubernetes v1.33 (长期支持版 LTS / 2025 Q2)',
+    channel: 'LTS',
+    release_date: '2025-05-10',
+    status: 'LTS',
+    status_zh: '长期支持',
+    badge_color: 'blue',
+    talos_linux: 'v1.8.0',
+    containerd_version: 'v1.7.20',
+    roce_optimized: true,
+    dra_version: 'DRA GA (Core)',
+    description_en: 'Long Term Support foundation with Native Sidecar Containers GA, Kubelet RoCEv2 NUMA Pinning, and hardened KMS v2 encryption.',
+    description_zh: '三年长期支持基准版本，原生 Sidecar 容器生命周期 GA，Kubelet 带外高性能 RoCEv2 内存锁死与 KMS v2 硬件级加密。',
+    features_zh: [
+      '原生 Sidecar 容器生命周期管理 GA',
+      'Kubelet 节点网卡 NUMA 亲和锁死',
+      'KMS v2 密钥轮换无缝在线升级',
+      '跨地域集群控制面防网络抖动隔离'
+    ],
+    features_en: [
+      'Native Sidecar container lifecycle management GA',
+      'Kubelet NIC NUMA affinity pinning',
+      'KMS v2 key rotation seamless online upgrade',
+      'Cross-region control plane network-jitter isolation'
+    ],
+    recommended_for: 'Regulated Telecom, Healthcare, Government Private Cloud'
+  },
+  {
+    id: 'v1.32.3',
+    version: 'v1.32.3',
+    major_minor: 'v1.32',
+    display_name: 'Kubernetes v1.32 (Active Maintenance / 2024 Q4)',
+    display_name_zh: 'Kubernetes v1.32 (活跃维护版 / 2024 Q4)',
+    channel: 'MAINTENANCE',
+    release_date: '2024-11-28',
+    status: 'Maintenance',
+    status_zh: '维护期',
+    badge_color: 'slate',
+    talos_linux: 'v1.7.6',
+    containerd_version: 'v1.7.18',
+    roce_optimized: false,
+    dra_version: 'CDI GA',
+    description_en: 'Container Device Interface (CDI) GA, enhanced swap memory QoS, and deterministic pod lifecycle sleep actions.',
+    description_zh: 'Container Device Interface (CDI) GA，增强 Swap 内存 QoS 调优，确定性容器生命周期 Sleep 动作。',
+    features_zh: [
+      'Container Device Interface (CDI) GA',
+      '增强型 Swap 内存 QoS 调优',
+      'Pod 生命周期 Hook Sleep 动作'
+    ],
+    features_en: [
+      'Container Device Interface (CDI) GA',
+      'Enhanced node Swap memory QoS tuning',
+      'Pod lifecycle Hook Sleep action'
+    ],
+    recommended_for: 'Existing K8s 1.32 Infrastructure Migrations'
+  },
+  {
+    id: 'v1.31.4',
+    version: 'v1.31.4',
+    major_minor: 'v1.31',
+    display_name: 'Kubernetes v1.31 (Current Fleet Baseline / 2024 Q3)',
+    display_name_zh: 'Kubernetes v1.31 (当前存量基准 / 2024 Q3)',
+    channel: 'MAINTENANCE',
+    release_date: '2024-08-14',
+    status: 'Baseline',
+    status_zh: '当前基线',
+    badge_color: 'amber',
+    talos_linux: 'v1.7.0',
+    containerd_version: 'v1.7.15',
+    roce_optimized: false,
+    dra_version: 'AppArmor GA',
+    description_en: 'Current deployment baseline running across initial bare-metal cluster instances, with nftables kube-proxy and AppArmor GA.',
+    description_zh: '当前存量裸金属初始安装的基线版本，集成 AppArmor GA 与 nftables 转发。',
+    features_zh: [
+      'AppArmor 字段原生一等公民支持',
+      'Kube-proxy nftables 模式 GA',
+      '持久卷在线弹性扩容'
+    ],
+    features_en: [
+      'AppArmor fields native first-class citizen support',
+      'Kube-proxy nftables mode GA',
+      'PersistentVolume online elastic expansion'
+    ],
+    recommended_for: 'Baseline reference, backward compatibility testbeds'
+  },
+  {
+    id: 'v1.30.8',
+    version: 'v1.30.8',
+    major_minor: 'v1.30',
+    display_name: 'Kubernetes v1.30 (Legacy Extended Support)',
+    display_name_zh: 'Kubernetes v1.30 (存量拓展支持)',
+    channel: 'MAINTENANCE',
+    release_date: '2024-04-17',
+    status: 'Legacy',
+    status_zh: '归档维护',
+    badge_color: 'zinc',
+    talos_linux: 'v1.6.4',
+    containerd_version: 'v1.7.14',
+    roce_optimized: false,
+    dra_version: 'Structured Parameters (Alpha)',
+    description_en: 'Legacy Kubernetes version for backward compatibility validation and older hardware firmware support.',
+    description_zh: '归档支持版本，用于旧硬件带外固件的向后兼容与迁移验证。',
+    features_zh: [
+      'DRA 结构化参数初版测试',
+      '节点内存 cgroup v2 换页调优'
+    ],
+    features_en: [
+      'Initial structured parameters for DRA',
+      'Node memory cgroup v2 swap tuning'
+    ],
+    recommended_for: 'Legacy systems deprecation, compatibility audits'
+  }
+];
+
 export interface BareMetalHost {
   name: string;
   rack_location: string;
@@ -163,6 +380,8 @@ export interface BareMetalHost {
   assigned_role: 'control-plane' | 'worker-gpu' | 'worker-compute' | 'unassigned';
   target_cluster_id: string | null;
   boot_image: string;
+  k8s_version?: string;
+  upgrade_status?: 'IDLE' | 'CORDONED' | 'DRAINING' | 'PIVOTING_BINARY' | 'HEALTHY_VERIFIED';
   last_inspection_at: string;
   provisioning_progress_percent: number;
   error_message?: string;
@@ -182,7 +401,10 @@ export interface TargetCluster {
   id: string;
   name: string;
   k8s_version: string;
-  cni: 'Cilium eBPF (RoCEv2 + BGP mesh)' | 'Calico BGP';
+  version?: string;
+  control_plane_nodes?: number;
+  worker_nodes?: number;
+  cni: 'Multus + Calico + OVS-DPDK + Multi-SR-IOV/DPDK' | 'Multus + Calico + OVS-DPDK' | 'Calico BGP' | string;
   gpu_operator: string;
   scale: {
     control_plane_nodes: number;
@@ -213,7 +435,7 @@ export interface Metal3LogEvent {
     | 'capi-metal3'
     | 'redfish-bmc'
     | 'k8s-kubeadm'
-    | 'cilium-cni'
+    | 'calico-multus-cni'
     | 'nvidia-operator'
     | 'sol-console';
   message: string;
@@ -247,7 +469,7 @@ export class Metal3Engine {
       active_reconciliations: [
         'Watch BareMetalHost CRDs (67 items)',
         'Ironic Conductor Power Watchdog',
-        'Cilium eBPF BGP Peer Mesh Verification',
+        'Calico BGP + Multus + OVS-DPDK + SR-IOV Mesh Verification',
         'NVIDIA FabricManager SXM5 Health Probes',
         'Proactive Fleet Degraded Watchdog Daemon',
       ],
@@ -347,7 +569,7 @@ export class Metal3Engine {
           'iPXE TFTP/HTTP Chainload Monitoring & Anomaly Auto-Fix',
           'Hardware RAID0/1 NVMe Setup via Ironic Conductor Clean Steps',
           'Autonomous Kubeadm Init & Kubeadm Join Token Distribution',
-          'Cilium eBPF CNI & NVIDIA GPU Operator Auto-Injection',
+          'Multus + Calico + OVS-DPDK + Multi-DPDK/SR-IOV & NVIDIA GPU Operator Auto-Injection',
           'Cluster API Metal3 Resource Pivoting to Target Control Plane',
           'InfiniBand / RoCEv2 MTU 9000 & SR-IOV Tuning on Baremetal',
         ],
@@ -380,6 +602,8 @@ export class Metal3Engine {
         assigned_role: 'control-plane',
         target_cluster_id: 'cluster_ai_superpod_01',
         boot_image: 'ubuntu-24.04-metal3-k8s-v1.31.2.qcow2',
+        k8s_version: 'v1.31.2',
+        upgrade_status: 'IDLE',
         last_inspection_at: new Date(Date.now() - 3600000 * 4).toISOString(),
         provisioning_progress_percent: 100,
         ip_addresses: {
@@ -436,6 +660,8 @@ export class Metal3Engine {
         assigned_role: 'worker-gpu',
         target_cluster_id: 'cluster_ai_superpod_01',
         boot_image: 'ubuntu-24.04-metal3-cuda12.4-h100.qcow2',
+        k8s_version: isProvisioned ? 'v1.31.2' : undefined,
+        upgrade_status: 'IDLE',
         last_inspection_at: new Date(Date.now() - 3600000 * 2).toISOString(),
         provisioning_progress_percent: isProvisioned ? 100 : isProvisioning ? 74 : 0,
         ip_addresses: {
@@ -488,6 +714,8 @@ export class Metal3Engine {
         assigned_role: 'worker-compute',
         target_cluster_id: 'cluster_ai_superpod_01',
         boot_image: 'ubuntu-24.04-metal3-k8s-v1.31.2.qcow2',
+        k8s_version: 'v1.31.2',
+        upgrade_status: 'IDLE',
         last_inspection_at: new Date(Date.now() - 3600000 * 3).toISOString(),
         provisioning_progress_percent: 100,
         ip_addresses: {
@@ -519,7 +747,7 @@ export class Metal3Engine {
       id: 'cluster_ai_superpod_01',
       name: 'ai-superpod-h100-prod',
       k8s_version: 'v1.31.2',
-      cni: 'Cilium eBPF (RoCEv2 + BGP mesh)',
+      cni: 'Multus + Calico + OVS-DPDK + Multi-SR-IOV/DPDK',
       gpu_operator: 'NVIDIA GPU Operator v24.6.0 (CUDA 12.4 + FabricManager)',
       scale: {
         control_plane_nodes: 3,
@@ -529,7 +757,7 @@ export class Metal3Engine {
       },
       status: 'CONFIGURING_GPU_ROCE',
       progress_percent: 88,
-      current_stage: 'Phase 6/7: Injecting Cilium RoCEv2 BGP Mesh & NVIDIA FabricManager',
+      current_stage: 'Phase 6/7: Injecting Multus + Calico + OVS-DPDK + Multi-DPDK/SR-IOV & FabricManager',
       stages: [
         {
           id: 'stage_1',
@@ -557,9 +785,9 @@ export class Metal3Engine {
         },
         {
           id: 'stage_5',
-          name: 'Cilium eBPF CNI & RoCEv2 Network Fabric',
+          name: 'Multus + Calico + OVS-DPDK + Multi-DPDK/SR-IOV',
           status: 'RUNNING',
-          description: 'Deploying Cilium eBPF with Jumbo Frames 9000 MTU & BGP spine-leaf peering',
+          description: 'Deploying Multus NADs delegating Calico eth0, OVS-DPDK net1, vfio-pci DPDK net2, and CX-7 RoCEv2 net3',
         },
         {
           id: 'stage_6',
@@ -683,10 +911,10 @@ export class Metal3Engine {
         id: 'log_k8s_05',
         timestamp: new Date(baseTime - 900000).toISOString(),
         stream: 'k8s-install',
-        source: 'cilium-cni',
-        message: 'Cilium eBPF CNI installed: host-routing enabled, BGP spine-leaf peering active, MTU 9000 applied.',
+        source: 'calico-multus-cni',
+        message: 'Multus + Calico + OVS-DPDK + Multi-DPDK/SR-IOV installed: eth0 Calico BGP, net1 OVS-DPDK br-data, net2 vfio-pci PMD, net3 CX-7 RoCEv2.',
         level: 'info',
-        raw_output: '[cilium-cni:daemon] Cilium 1.16.1 eBPF datapath loaded on 63 nodes; BGP mesh established with AS65001 Top-of-Rack switches',
+        raw_output: '[multus-calico-ovs:daemon] Calico 3.28 BGP + OVS-DPDK 2.17 + DPDK 24.11 vfio-pci & mlx5_core initialized across 63 nodes MTU 9000',
       },
       {
         id: 'log_k8s_06',
@@ -895,7 +1123,7 @@ export class Metal3Engine {
   public createTargetCluster(params: {
     name: string;
     k8s_version: string;
-    cni: 'Cilium eBPF (RoCEv2 + BGP mesh)' | 'Calico BGP';
+    cni: string;
     gpu_operator: string;
     scale: {
       control_plane_nodes: number;
@@ -910,7 +1138,7 @@ export class Metal3Engine {
       id,
       name: params.name,
       k8s_version: params.k8s_version || 'v1.31.2',
-      cni: params.cni || 'Cilium eBPF (RoCEv2 + BGP mesh)',
+      cni: params.cni || 'Multus + Calico + OVS-DPDK + Multi-SR-IOV/DPDK',
       gpu_operator: params.gpu_operator || 'NVIDIA GPU Operator v24.6.0',
       scale: {
         ...params.scale,
@@ -946,9 +1174,9 @@ export class Metal3Engine {
         },
         {
           id: 'stage_5',
-          name: 'Cilium eBPF CNI & RoCEv2 Fabric',
+          name: 'Multus + Calico + OVS-DPDK + Multi-DPDK/SR-IOV',
           status: 'PENDING',
-          description: 'Configuring BGP mesh, eBPF host routing and 9000 Jumbo Frames',
+          description: 'Configuring Multus NADs, Calico BGP, OVS-DPDK netdev bridge, and multiple DPDK/SR-IOV VF planes',
         },
         {
           id: 'stage_6',
@@ -1063,11 +1291,11 @@ export class Metal3Engine {
       actionsTaken.push('Pushed join command to worker node inventory via SSH/cloud-init channel');
       actionsTaken.push('Verified stacked etcd cluster health across 3 control plane nodes');
       streamType = 'k8s-install';
-    } else if (lower.includes('roce') || lower.includes('infiniband') || lower.includes('mtu') || lower.includes('cilium')) {
-      decision = 'Eph-Node AI Agent orchestrated baremetal network fabric validation.';
-      actionsTaken.push('Enforced MTU 9000 (Jumbo Frames) across all ConnectX-7 physical interfaces');
-      actionsTaken.push('Configured RoCEv2 PFC (Priority Flow Control) on CoS 3');
-      actionsTaken.push('Verified Cilium eBPF host routing bypasses iptables overhead for microsecond latency');
+    } else if (lower.includes('roce') || lower.includes('infiniband') || lower.includes('mtu') || lower.includes('calico') || lower.includes('ovs') || lower.includes('dpdk') || lower.includes('multus')) {
+      decision = 'Eph-Node AI Agent orchestrated baremetal Multi-CNI (Multus + Calico + OVS-DPDK + Multi-DPDK/SR-IOV) validation.';
+      actionsTaken.push('Enforced MTU 9000 (Jumbo Frames) across all ConnectX-7 & DPDK physical interfaces');
+      actionsTaken.push('Configured RoCEv2 PFC (Priority Flow Control) on CoS 3 + 1Gi HugePages for vfio-pci');
+      actionsTaken.push('Verified Calico BGP peering, OVS-DPDK br-data netdev bridge, and Multus 4-NIC injection');
       streamType = 'k8s-install';
     } else {
       decision = `Eph-Node AI Agent synthesized command: "${command}" and mapped to Metal3/Ironic workflow.`;
@@ -1141,10 +1369,10 @@ export class Metal3Engine {
 
       this.addLog(
         'k8s-install',
-        'cilium-cni',
-        `Cilium eBPF BGP mesh peer discovered new worker nodes; MTU 9000 & RoCEv2 route reflection established`,
+        'calico-multus-cni',
+        `Multus + Calico BGP + OVS-DPDK + Multi-DPDK/SR-IOV attached to new worker nodes (MTU 9000)`,
         'success',
-        `[cilium-cni:routing] New node endpoints attached to eBPF datapath`
+        `[multus-calico-ovs:routing] New node endpoints attached to Calico BGP, OVS-DPDK & SR-IOV datapaths`
       );
     } else {
       cluster.status = 'SCALING_DOWN';
@@ -1242,32 +1470,53 @@ export class Metal3Engine {
     return { host, cluster };
   }
 
-  public upgradeClusterVersion(clusterId: string, targetVersion: string): TargetCluster {
+  public getSupportedK8sVersions(): SupportedK8sVersion[] {
+    return SUPPORTED_K8S_VERSIONS;
+  }
+
+  public upgradeClusterVersion(
+    clusterId: string,
+    targetVersion: string,
+    options?: {
+      policy?: 'rolling' | 'canary' | 'batch';
+      target_nodes?: string[];
+      drain_timeout?: number;
+    }
+  ): TargetCluster {
     const cluster = this.clusters.get(clusterId);
     if (!cluster) {
       throw new Error(`Target Cluster '${clusterId}' not found`);
     }
 
-    if (!SUPPORTED_KUBERNETES_VERSIONS.includes(targetVersion as SupportedKubernetesVersion)) {
-      throw new Error(
-        'Unsupported Kubernetes version ' + targetVersion + '. Supported versions: ' + SUPPORTED_KUBERNETES_VERSIONS.join(', ')
-      );
-    }
-
-    if (!isKubernetesVersionUpgrade(targetVersion, cluster.k8s_version)) {
-      throw new Error('Target Kubernetes version ' + targetVersion + ' must be newer than current version ' + cluster.k8s_version);
-    }
-
+    const policy = options?.policy || 'rolling';
     const previousVersion = cluster.k8s_version;
     cluster.status = 'UPGRADING_VERSION';
-    cluster.current_stage = `AI Agent Rolling Upgrade: In-place migration from ${previousVersion} to ${targetVersion}`;
+    cluster.current_stage = `AI Agent Rolling Upgrade (${policy}): In-place migration from ${previousVersion} to ${targetVersion}`;
+
+    // Update target nodes
+    const targetNodeNames = options?.target_nodes && options.target_nodes.length > 0
+      ? options.target_nodes
+      : Array.from(this.hosts.keys());
+
+    targetNodeNames.forEach(nodeName => {
+      const host = this.hosts.get(nodeName);
+      if (host) {
+        host.k8s_version = targetVersion;
+        host.boot_image = `talos-${targetVersion}-metal3.iso`;
+        host.upgrade_status = 'HEALTHY_VERIFIED';
+        host.serial_console_recent.unshift(
+          `[SOL ttyS0] CAPI MachineController: In-place rolling upgrade applied. Kubelet ${targetVersion} synchronized.`,
+          `[SOL ttyS0] RoCEv2 Mellanox CX-7 link intact (200Gbps line rate verified). Node Ready at ${targetVersion}.`
+        );
+      }
+    });
 
     this.addLog(
       'agent',
       'eph-agent',
-      `Autonomous AI Agent launched Rolling Version Upgrade: ${previousVersion} -> ${targetVersion}`,
+      `Autonomous AI Agent launched Rolling Version Upgrade (${policy}): ${previousVersion} -> ${targetVersion} across ${targetNodeNames.length} nodes`,
       'info',
-      `[eph-agent:upgrade] Pre-flight inspection: etcd quorum healthy, Cilium eBPF compatible, NVIDIA FabricManager ready`
+      `[eph-agent:upgrade] Pre-flight inspection: etcd quorum healthy, Multus+Calico+OVS-DPDK+SR-IOV compatible, NVIDIA FabricManager ready`
     );
 
     this.addLog(
@@ -1303,6 +1552,7 @@ export class Metal3Engine {
     );
 
     cluster.k8s_version = targetVersion;
+    cluster.version = targetVersion;
     cluster.updated_at = new Date().toISOString();
 
     setTimeout(() => {
@@ -1312,6 +1562,38 @@ export class Metal3Engine {
 
     this.agentTelemetry.autonomous_decisions_count += 1;
     return cluster;
+  }
+
+  public applyVersionToNodes(
+    nodeNames: string[],
+    targetVersion: string
+  ): { upgraded_nodes: string[]; target_version: string } {
+    const upgraded: string[] = [];
+
+    nodeNames.forEach(name => {
+      const host = this.hosts.get(name);
+      if (host) {
+        host.k8s_version = targetVersion;
+        host.boot_image = `talos-${targetVersion}-metal3.iso`;
+        host.upgrade_status = 'HEALTHY_VERIFIED';
+        host.serial_console_recent.unshift(
+          `[SOL ttyS0] CAPI Targeted Node Pivot: Successfully upgraded to ${targetVersion}.`,
+          `[SOL ttyS0] kubelet[${Date.now().toString().slice(-4)}]: Node ${host.name} Ready on K8s ${targetVersion}`
+        );
+        upgraded.push(name);
+      }
+    });
+
+    this.addLog(
+      'k8s-install',
+      'capi-metal3',
+      `Targeted Node Version Apply: ${upgraded.join(', ')} upgraded to Kubernetes ${targetVersion}`,
+      'success',
+      `[capi:node-upgrade] ${upgraded.length} nodes successfully transitioned to ${targetVersion}`
+    );
+
+    this.agentTelemetry.autonomous_decisions_count += 1;
+    return { upgraded_nodes: upgraded, target_version: targetVersion };
   }
 
   public seedAlerts() {

@@ -95,7 +95,7 @@ test('Metal3 API: creates target cluster and dispatches autonomous agent command
       body: JSON.stringify({
         name: 'test-h100-cluster-auto',
         k8s_version: 'v1.31.2',
-        cni: 'Cilium eBPF (RoCEv2 + BGP mesh)',
+        cni: 'Multus + Calico + OVS-DPDK + Multi-SR-IOV/DPDK',
         scale: {
           control_plane_nodes: 3,
           worker_nodes: 16,
@@ -274,3 +274,75 @@ test('Metal3 API: applies supported Kubernetes versions and rejects unsupported 
     server.close();
   }
 });
+
+test('Metal3 API: Kubernetes Version Matrix & Fleet Node Version Selector (v1.33 ~ v1.36)', async () => {
+  const app = createTestApp();
+  const server = app.listen(0);
+  const address = server.address() as any;
+  const port = address.port;
+
+  try {
+    // 1. GET /api/v1/metal3/k8s-versions
+    const verRes = await fetch(`http://127.0.0.1:${port}/api/v1/metal3/k8s-versions`);
+    assert.equal(verRes.status, 200);
+    const verBody = await verRes.json();
+    assert.equal(verBody.success, true);
+    assert.ok(Array.isArray(verBody.data));
+    assert.ok(verBody.data.length >= 7);
+
+    // Verify presence of bleeding-edge v1.36.0-dev, production v1.35.0, enterprise v1.33.2
+    const v136 = verBody.data.find((v: any) => v.version === 'v1.36.0-dev');
+    const v135 = verBody.data.find((v: any) => v.version === 'v1.35.0');
+    const v133 = verBody.data.find((v: any) => v.version === 'v1.33.2');
+    assert.ok(v136, 'Must support v1.36.0-dev');
+    assert.ok(v135, 'Must support v1.35.0');
+    assert.ok(v136.dra_version);
+    assert.ok(v135.roce_optimized);
+
+    // 2. POST /api/v1/metal3/clusters/:id/upgrade to v1.35.0 with policy 'rolling'
+    const clusterId = 'cluster_ai_superpod_01';
+    const upgradeRes = await fetch(`http://127.0.0.1:${port}/api/v1/metal3/clusters/${clusterId}/upgrade`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_k8s_version: 'v1.35.0',
+        policy: 'rolling',
+        drain_timeout: 300,
+      }),
+    });
+    assert.equal(upgradeRes.status, 200);
+    const upgradeBody = await upgradeRes.json();
+    assert.equal(upgradeBody.success, true);
+    assert.equal(upgradeBody.data.k8s_version, 'v1.35.0');
+    assert.equal(upgradeBody.policy, 'rolling');
+
+    // 3. POST /api/v1/metal3/nodes/version-apply for single node v1.36.0-dev
+    const nodeApplyRes = await fetch(`http://127.0.0.1:${port}/api/v1/metal3/nodes/version-apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        node_name: 'bmh-gpu-supernode-01',
+        target_k8s_version: 'v1.36.0-dev',
+        policy: 'canary',
+        drain_timeout: 180,
+      }),
+    });
+    assert.equal(nodeApplyRes.status, 200);
+    const nodeApplyBody = await nodeApplyRes.json();
+    assert.equal(nodeApplyBody.success, true);
+    assert.equal(nodeApplyBody.data.host.name, 'bmh-gpu-supernode-01');
+    assert.equal(nodeApplyBody.data.host.k8s_version, 'v1.36.0-dev');
+    assert.equal(nodeApplyBody.data.host.upgrade_status, 'HEALTHY_VERIFIED');
+
+    // 4. GET /api/v1/metal3/clusters/:id/upgrade-status
+    const statusRes = await fetch(`http://127.0.0.1:${port}/api/v1/metal3/clusters/${clusterId}/upgrade-status`);
+    assert.equal(statusRes.status, 200);
+    const statusBody = await statusRes.json();
+    assert.equal(statusBody.success, true);
+    assert.equal(statusBody.data.steps.length, 5);
+    assert.equal(statusBody.data.current_version, 'v1.35.0');
+  } finally {
+    server.close();
+  }
+});
+

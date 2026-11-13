@@ -338,21 +338,42 @@ apiRouter.get('/system/backend-code', (req: Request, res: Response) => {
   try {
     let filePath = '';
     let fileName = '';
-    if (lang === 'go') {
+    if (lang === 'go' || lang === 'go-main') {
+      filePath = path.resolve(process.cwd(), 'backend-go/cmd/server/main.go');
+      fileName = 'main.go';
+    } else if (lang === 'go-metal3') {
+      filePath = path.resolve(process.cwd(), 'backend-go/pkg/metal3/metal3.go');
+      fileName = 'metal3.go';
+    } else if (lang === 'go-router') {
+      filePath = path.resolve(process.cwd(), 'backend-go/pkg/api/router.go');
+      fileName = 'router.go';
+    } else if (lang === 'go-policy') {
+      filePath = path.resolve(process.cwd(), 'backend-go/pkg/policy/policy.go');
+      fileName = 'policy.go';
+    } else if (lang === 'go-connectors') {
+      filePath = path.resolve(process.cwd(), 'backend-go/pkg/connectors/connectors.go');
+      fileName = 'connectors.go';
+    } else if (lang === 'go-dag') {
+      filePath = path.resolve(process.cwd(), 'backend-go/pkg/dag/dag.go');
+      fileName = 'dag.go';
+    } else if (lang === 'go-store') {
+      filePath = path.resolve(process.cwd(), 'backend-go/pkg/store/store.go');
+      fileName = 'store.go';
+    } else if (lang === 'go-docker') {
+      filePath = path.resolve(process.cwd(), 'backend-go/Dockerfile');
+      fileName = 'Dockerfile';
+    } else if (lang === 'go-root') {
       filePath = path.resolve(process.cwd(), 'backend-go/main.go');
       fileName = 'main.go';
     } else if (lang === 'python') {
       filePath = path.resolve(process.cwd(), 'backend-python/main.py');
       fileName = 'main.py';
-    } else if (lang === 'go-docker') {
-      filePath = path.resolve(process.cwd(), 'backend-go/Dockerfile');
-      fileName = 'Dockerfile';
     } else if (lang === 'python-docker') {
       filePath = path.resolve(process.cwd(), 'backend-python/Dockerfile');
       fileName = 'Dockerfile';
     } else {
-      filePath = path.resolve(process.cwd(), 'server.ts');
-      fileName = 'server.ts';
+      filePath = path.resolve(process.cwd(), 'backend-go/cmd/server/main.go');
+      fileName = 'main.go';
     }
 
     if (fs.existsSync(filePath)) {
@@ -1489,7 +1510,7 @@ apiRouter.post('/metal3/clusters', (req: Request, res: Response) => {
   const cluster = globalMetal3Engine.createTargetCluster({
     name,
     k8s_version: k8s_version || 'v1.31.2',
-    cni: cni || 'Cilium eBPF (RoCEv2 + BGP mesh)',
+    cni: cni || 'Multus + Calico + OVS-DPDK + Multi-SR-IOV/DPDK',
     gpu_operator: gpu_operator || 'NVIDIA GPU Operator v24.6.0',
     scale: scale || { control_plane_nodes: 3, worker_nodes: 32, gpu_nodes: 32 },
   });
@@ -1605,9 +1626,18 @@ apiRouter.post('/metal3/clusters/:id/scale-down-node', (req: Request, res: Respo
   }
 });
 
+apiRouter.get('/metal3/k8s-versions', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: globalMetal3Engine.getSupportedK8sVersions(),
+    default_version: 'v1.35.0',
+    current_fleet_version: 'v1.31.2',
+  });
+});
+
 apiRouter.post('/metal3/clusters/:id/upgrade', (req: Request, res: Response) => {
   const { id } = req.params;
-  const { target_k8s_version } = req.body;
+  const { target_k8s_version, policy = 'rolling', target_nodes = [], drain_timeout = 60 } = req.body;
   const principal = (req as any).principal;
 
   if (typeof target_k8s_version !== 'string' || !target_k8s_version.trim()) {
@@ -1624,7 +1654,11 @@ apiRouter.post('/metal3/clusters/:id/upgrade', (req: Request, res: Response) => 
   }
 
   try {
-    const updated = globalMetal3Engine.upgradeClusterVersion(id, target_k8s_version);
+    const updated = globalMetal3Engine.upgradeClusterVersion(id, target_k8s_version, {
+      policy,
+      target_nodes,
+      drain_timeout,
+    });
 
     globalStore.recordAudit({
       trace_id: `tr_cl_upg_${Date.now()}`,
@@ -1635,12 +1669,18 @@ apiRouter.post('/metal3/clusters/:id/upgrade', (req: Request, res: Response) => 
       actor_role: principal.role,
       event_type: 'WORKFLOW_PUBLISHED',
       target_resource: `TargetK8sCluster/${id}`,
-      summary: `AI Agent performed in-place rolling upgrade of cluster ${id} to Kubernetes ${target_k8s_version}`,
-      payload_redacted: { cluster_id: id, target_version: target_k8s_version },
+      summary: `AI Agent initiated ${policy} upgrade of cluster ${id} to Kubernetes ${target_k8s_version} (${target_nodes.length ? target_nodes.length + ' nodes' : 'fleet-wide'})`,
+      payload_redacted: { cluster_id: id, target_version: target_k8s_version, policy, target_nodes },
       status: 'SUCCESS',
     });
 
-    res.json({ success: true, data: updated });
+    res.json({
+      success: true,
+      data: updated,
+      policy,
+      target_k8s_version,
+      message: `Zero-downtime rolling upgrade to ${target_k8s_version} dispatched successfully.`,
+    });
   } catch (err: any) {
     const notFound = String(err?.message || '').includes('not found');
     res.status(notFound ? 404 : 400).json({
@@ -1650,6 +1690,86 @@ apiRouter.post('/metal3/clusters/:id/upgrade', (req: Request, res: Response) => 
       },
     });
   }
+});
+
+apiRouter.post('/metal3/nodes/version-apply', (req: Request, res: Response) => {
+  let { node_names, node_name, target_k8s_version, target_version } = req.body;
+  const principal = (req as any).principal;
+  const finalVersion = target_k8s_version || target_version;
+
+  const names: string[] = [];
+  if (Array.isArray(node_names)) {
+    names.push(...node_names);
+  } else if (typeof node_names === 'string' && node_names.trim()) {
+    names.push(node_names.trim());
+  }
+  if (node_name && typeof node_name === 'string' && !names.includes(node_name.trim())) {
+    names.push(node_name.trim());
+  }
+
+  if (!finalVersion) {
+    return res.status(400).json({ error: { code: 'MISSING_VERSION', message: 'target_k8s_version is required' } });
+  }
+  if (names.length === 0) {
+    return res.status(400).json({ error: { code: 'MISSING_NODES', message: 'node_name or node_names is required' } });
+  }
+
+  try {
+    const result = globalMetal3Engine.applyVersionToNodes(names, finalVersion);
+    const host = names.length === 1 ? globalMetal3Engine.hosts.get(names[0]) : null;
+
+    globalStore.recordAudit({
+      trace_id: `tr_node_upg_${Date.now()}`,
+      tenant_id: principal.tenant_id,
+      project_id: principal.active_project_id,
+      actor_id: principal.actor_id,
+      actor_name: principal.actor_name,
+      actor_role: principal.role,
+      event_type: 'TOOL_INVOKED',
+      target_resource: `BareMetalHostBatch/${names.join(',')}`,
+      summary: `Applied Kubernetes ${finalVersion} to baremetal nodes: ${names.join(', ')}`,
+      payload_redacted: { node_names: names, target_version: finalVersion },
+      status: 'SUCCESS',
+    });
+
+    res.json({
+      success: true,
+      data: {
+        ...result,
+        host,
+      },
+      message: `Successfully upgraded ${names.length} nodes to Kubernetes ${finalVersion}`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: { code: 'NODE_UPGRADE_FAILED', message: err.message } });
+  }
+});
+
+apiRouter.get('/metal3/clusters/:id/upgrade-status', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const cluster = globalMetal3Engine.clusters.get(id);
+  const isUpgrading = cluster?.status === 'UPGRADING_VERSION';
+
+  res.json({
+    success: true,
+    data: {
+      cluster_id: id,
+      is_upgrading: isUpgrading,
+      current_version: cluster?.k8s_version || 'v1.31.2',
+      target_version: cluster?.k8s_version || 'v1.35.0',
+      status: cluster?.status || 'HEALTHY_OPERATIONAL',
+      stage: cluster?.current_stage || 'Cluster ready',
+      total_nodes: cluster?.scale?.total_nodes || 15,
+      upgraded_nodes_count: isUpgrading ? Math.floor((cluster?.scale?.total_nodes || 15) * 0.7) : (cluster?.scale?.total_nodes || 15),
+      steps: [
+        { id: 'step_1', name: 'Pre-flight Compatibility & Etcd Quorum', status: 'COMPLETED' },
+        { id: 'step_2', name: 'Node Cordon & Workload Eviction (Drain)', status: isUpgrading ? 'RUNNING' : 'COMPLETED' },
+        { id: 'step_3', name: 'Talos Linux Kernel / Kubernetes Binary Pivot', status: isUpgrading ? 'PENDING' : 'COMPLETED' },
+        { id: 'step_4', name: 'Kubelet RoCEv2 & FabricManager Healthcheck', status: isUpgrading ? 'PENDING' : 'COMPLETED' },
+        { id: 'step_5', name: 'Node Uncordon & Traffic Restoration', status: isUpgrading ? 'PENDING' : 'COMPLETED' },
+      ],
+    },
+  });
 });
 
 apiRouter.post('/metal3/agent/command', (req: Request, res: Response) => {
@@ -1773,6 +1893,734 @@ apiRouter.post('/metal3/alerts/:id/dismiss', (req: Request, res: Response) => {
   const { id } = req.params;
   const ok = globalMetal3Engine.dismissAlert(id);
   res.json({ success: ok, data: { alert_id: id, dismissed: ok } });
+});
+
+// BareMetalHost Detail & Telemetry Endpoints
+apiRouter.get('/metal3/bmh/:name/telemetry', (req: Request, res: Response) => {
+  const { name } = req.params;
+  const host = globalMetal3Engine.hosts.get(name);
+  if (!host) {
+    return res.status(404).json({ error: { code: 'HOST_NOT_FOUND', message: `Host ${name} not found` } });
+  }
+  res.json({
+    success: true,
+    telemetry: {
+      host_name: host.name,
+      power_status: host.power_status,
+      provisioning_status: host.provisioning_status,
+      rack_location: host.rack_location,
+      bmc_address: host.bmc_address,
+      cpu_cores: host.hardware.cores,
+      cpu_temp_c: host.sensors?.cpu_temp_c || 42.5,
+      dimm_temp_c: 36.4,
+      fan_rpm: host.sensors?.fan_speed_rpm || 7200,
+      power_watt: host.sensors?.power_watts || 420,
+      psu_efficiency: '94.2% (80 PLUS Titanium)',
+      pcie_link_speed: 'PCIe Gen5 x16 (32 GT/s per lane)',
+      roce_gid: '0xfe800000000000000002c9ffff28a110',
+      nvlink_bandwidth: '900 GB/s bidirectional',
+      redfish_session: 'ESTABLISHED_SECURE_MTLS',
+      updated_at: new Date().toISOString(),
+    },
+  });
+});
+
+apiRouter.post('/metal3/bmh/:name/reprovision', (req: Request, res: Response) => {
+  const { name } = req.params;
+  const host = globalMetal3Engine.hosts.get(name);
+  if (!host) {
+    return res.status(404).json({ error: { code: 'HOST_NOT_FOUND', message: `Host ${name} not found` } });
+  }
+  host.provisioning_status = 'Provisioning';
+  host.power_status = 'REBOOTING';
+  res.json({ success: true, host });
+});
+
+apiRouter.get('/metal3/bmh/:name/sol', (req: Request, res: Response) => {
+  const { name } = req.params;
+  res.json({
+    success: true,
+    host: name,
+    sol: [
+      `[SOL ${name}] AMI MegaRAC SP-X BIOS 4.12 initialized`,
+      `[SOL ${name}] Memory check 512GB DDR5-5600 ECC Passed`,
+      `[SOL ${name}] PCIe Gen5 root complex trained at 32 GT/s`,
+      `[SOL ${name}] Mellanox ConnectX-7 VF direct SR-IOV bound to net2 (RoCEv2 200G)`,
+      `[SOL ${name}] Kubelet v1.31.2 joined Target Control Plane VIP 10.240.10.10`,
+      `[SOL ${name}] Node condition Ready=True, DiskPressure=False, MemoryPressure=False`,
+    ].join('\n'),
+  });
+});
+
+// Dual-Agent Orchestration Endpoints
+apiRouter.get('/metal3/dual-agent/status', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      bootstrap_agent: {
+        id: 'agent-bootstrap-eph-01',
+        name: 'Eph-Node Bootstrap Controller Agent (Go)',
+        role: 'EPH_BOOTSTRAP_AGENT',
+        location: 'eph-bootstrap-node-01 (Isolated Bootstrap Pod)',
+        status: 'ACTIVE',
+        version: 'v2.4.0-metal3-bmo-go',
+        pod_name: 'metal3-eph-agent-daemon-7b89f4',
+        namespace: 'metal3-system',
+        heartbeat: new Date().toISOString(),
+        active_tasks: [
+          'Ironic Conductor Watchdog',
+          'Dnsmasq TFTP Lease Monitor',
+          'BareMetalHost Inventory Inspection',
+          'Target CP01 VirtualMedia Staging',
+        ],
+        metrics: {
+          ironic_state: 'HEALTHY',
+          bmo_reconciles_sec: 42,
+          dhcp_leases_active: 15,
+          cpu_usage_percent: 1.4,
+          mem_rss_mb: 28,
+        },
+      },
+      target_agent: {
+        id: 'agent-target-cluster-01',
+        name: 'Target Cluster Lifecycle & Convergence Agent (Go)',
+        role: 'TARGET_CLUSTER_LIFECYCLE_AGENT',
+        location: 'cluster-prod-gpu-k8s (Target Production K8s Pod)',
+        status: 'ACTIVE',
+        version: 'v2.4.0-metal3-capm3-go',
+        pod_name: 'capm3-target-agent-operator-9c41a2',
+        namespace: 'capi-system',
+        heartbeat: new Date().toISOString(),
+        active_tasks: [
+          'CAPI MachinePool Reconciler',
+          'Pivot CRD Custodian',
+          'Multus/OVS/Calico/SRIOV Mesh Orchestrator',
+          'Worker Auto-Join Barrier',
+        ],
+        metrics: {
+          capi_machines_healthy: 10,
+          etcd_quorum_status: 'HEALTHY_3_MEMBERS',
+          multus_nads_ready: 3,
+          cpu_usage_percent: 2.1,
+          mem_rss_mb: 34,
+        },
+      },
+      current_phase: 'CLUSTER_HEALTHY',
+      pivot_status: 'SELF_HOSTED',
+      synced_at: new Date().toISOString(),
+      events: [
+        {
+          id: 'evt_da_01',
+          source: 'EPH_AGENT',
+          phase: 'EPH_BOOTSTRAP',
+          level: 'SUCCESS',
+          message: 'Eph-node bootstrap complete. Ironic conductor & Baremetal-operator v0.8.0 online.',
+          message_zh: '临时引导节点 (eph-node) 启动完成，Ironic Conductor 与 Baremetal-operator 就绪。',
+          timestamp: new Date(Date.now() - 3600000).toISOString(),
+        },
+        {
+          id: 'evt_da_02',
+          source: 'EPH_AGENT',
+          phase: 'BMH_INSPECTION',
+          level: 'INFO',
+          message: '15 BareMetalHosts inspected via Redfish out-of-band IPMI. Discovered 8x H100 GPUs per worker.',
+          message_zh: '通过 Redfish 带外管理完成 15 台裸机硬件探针，识别出 Worker 节点各搭载 8 张 H100 GPU。',
+          timestamp: new Date(Date.now() - 2700000).toISOString(),
+        },
+        {
+          id: 'evt_da_03',
+          source: 'EPH_AGENT',
+          phase: 'TARGET_CP_PROVISION',
+          level: 'SUCCESS',
+          message: 'Provisioned bmh-master-k8s-01 via VirtualMedia boot. Target control plane initialized.',
+          message_zh: '通过 VirtualMedia 镜像注入引导 bmh-master-k8s-01，目标集群控制面 Master 01 就绪。',
+          timestamp: new Date(Date.now() - 1800000).toISOString(),
+        },
+        {
+          id: 'evt_da_04',
+          source: 'COORDINATOR',
+          phase: 'PIVOT_TRANSFER',
+          level: 'SUCCESS',
+          message: 'Pivot successful: Transferred CAPM3 & BMO state from eph-node to target cluster. Target is now self-hosted.',
+          message_zh: 'Pivot 枢纽移交成功：将 CAPM3 与 BMO 状态无缝移交至目标集群自身自托管。',
+          timestamp: new Date(Date.now() - 900000).toISOString(),
+        },
+        {
+          id: 'evt_da_05',
+          source: 'TARGET_AGENT',
+          phase: 'MULTI_CNI_CONVERGE',
+          level: 'SUCCESS',
+          message: 'Multi-CNI mesh converged: Multus v4.1 injecting Calico (eth0), OVS br-data (net1), and Mellanox CX-7 SR-IOV (net2).',
+          message_zh: 'Multi-CNI 网络网状收敛完成：Multus 注入 Calico、OVS VLAN200 与 SR-IOV 200Gbps RDMA。',
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    },
+  });
+});
+
+apiRouter.post('/metal3/dual-agent/trigger', (req: Request, res: Response) => {
+  const { phase = 'MULTI_CNI_CONVERGE' } = req.body;
+  res.json({
+    success: true,
+    data: {
+      current_phase: phase,
+      pivot_status: 'IN_PROGRESS',
+      synced_at: new Date().toISOString(),
+    },
+  });
+});
+
+apiRouter.post('/metal3/dual-agent/sync', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      synced_at: new Date().toISOString(),
+      eph_agent_heartbeat: new Date().toISOString(),
+      target_agent_heartbeat: new Date().toISOString(),
+      heartbeat_status: 'HEALTHY_SYNCED',
+    },
+  });
+});
+
+apiRouter.post('/metal3/dual-agent/pivot', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      pivot_status: 'COMPLETED_SELF_HOSTED',
+      synced_at: new Date().toISOString(),
+      message: 'Pivot handover verified. Eph-node daemon entering decoupled standby mode.',
+    },
+  });
+});
+
+// Pure Go Pod-Resident Dual-Agent Daemons Endpoints
+apiRouter.get('/metal3/agents/pod-daemons', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      agent_1_eph_node: {
+        agent_id: 'agent-bootstrap-eph-01',
+        pod_name: 'metal3-eph-agent-daemon-7b89f4',
+        namespace: 'metal3-system',
+        node_name: 'eph-bootstrap-node-01',
+        role: 'EPH_BOOTSTRAP_AGENT',
+        status: 'ONLINE',
+        current_phase: 'EPH_BOOTSTRAP',
+        is_pivot_completed: true,
+        last_heartbeat: new Date().toISOString(),
+        heartbeat_age_sec: 1.2,
+        active_tasks: [
+          'Ironic Conductor Watchdog',
+          'Dnsmasq TFTP Lease Monitor',
+          'BareMetalHost Inventory Inspection',
+          'Target CP01 VirtualMedia Staging',
+        ],
+        metrics: {
+          ironic_state: 'HEALTHY',
+          bmo_reconciles_sec: 42,
+          dhcp_leases_active: 15,
+          cpu_usage_percent: 1.4,
+          mem_rss_mb: 28,
+        },
+        discovered_bmh: 15,
+      },
+      agent_2_target_capi: {
+        agent_id: 'agent-target-cluster-01',
+        pod_name: 'capm3-target-agent-operator-9c41a2',
+        namespace: 'capi-system',
+        cluster_id: 'cluster-prod-gpu-k8s',
+        role: 'TARGET_CLUSTER_LIFECYCLE_AGENT',
+        status: 'ACTIVE',
+        current_phase: 'MULTI_CNI_CONVERGE',
+        cni_mesh_ready: true,
+        pivot_accepted: true,
+        last_heartbeat: new Date().toISOString(),
+        heartbeat_age_sec: 0.8,
+        active_tasks: [
+          'CAPI MachinePool Reconciler',
+          'Pivot CRD Custodian',
+          'Multus/OVS/Calico/SRIOV Mesh Orchestrator',
+          'Worker Auto-Join Barrier',
+        ],
+        metrics: {
+          capi_machines_healthy: 10,
+          etcd_quorum_status: 'HEALTHY_3_MEMBERS',
+          multus_nads_ready: 3,
+          cpu_usage_percent: 2.1,
+          mem_rss_mb: 34,
+        },
+      },
+      coordinated_at: new Date().toISOString(),
+      runtime: 'Golang 1.22+ Containerized Pod Daemons',
+    },
+  });
+});
+
+apiRouter.post('/metal3/agents/pod-daemons/command', (req: Request, res: Response) => {
+  const { target_agent = 'eph', command = 'INSPECT_INVENTORY' } = req.body;
+  const timestamp = new Date().toISOString();
+  let output = '';
+
+  if (target_agent === 'eph' || target_agent === 'agent_1') {
+    switch (command) {
+      case 'INSPECT_INVENTORY':
+        output = `[${timestamp}][EphNodeAgent Pod metal3-eph-agent-daemon-7b89f4] Redfish out-of-band sweep completed: 15 BareMetalHosts verified, 64x NVIDIA H100 GPUs discovered.`;
+        break;
+      case 'TRIGGER_CP01_BOOT':
+        output = `[${timestamp}][EphNodeAgent Pod metal3-eph-agent-daemon-7b89f4] VirtualMedia ISO attached to bmh-master-k8s-01. Kubelet bootstrap initiated on control plane node 1.`;
+        break;
+      case 'PREPARE_PIVOT':
+        output = `[${timestamp}][EphNodeAgent Pod metal3-eph-agent-daemon-7b89f4] CRD states serialized; Ironic DB snapshot prepared for target cluster CAPI handover.`;
+        break;
+      case 'COMPLETE_PIVOT':
+        output = `[${timestamp}][EphNodeAgent Pod metal3-eph-agent-daemon-7b89f4] Pivot handover verified. Eph-node daemon entering decoupled standby mode.`;
+        break;
+      default:
+        output = `[${timestamp}][EphNodeAgent Pod metal3-eph-agent-daemon-7b89f4] Executed Go instruction: ${command} (Exit code 0)`;
+    }
+  } else {
+    switch (command) {
+      case 'VERIFY_ETCD_QUORUM':
+        output = `[${timestamp}][TargetClusterAgent Pod capm3-target-agent-operator-9c41a2] etcd quorum status: HEALTHY (3/3 members leader election verified, roundtrip 0.8ms).`;
+        break;
+      case 'ACCEPT_PIVOT_CRD':
+        output = `[${timestamp}][TargetClusterAgent Pod capm3-target-agent-operator-9c41a2] Successfully received 15 BareMetalHost CRDs from eph-node. Target cluster is now self-hosting.`;
+        break;
+      case 'IGNITE_MULTI_CNI':
+        output = `[${timestamp}][TargetClusterAgent Pod capm3-target-agent-operator-9c41a2] Multi-CNI mesh converged: Multus v4.1 injecting Calico (eth0), OVS br-data (net1), and Mellanox CX-7 SR-IOV (net2).`;
+        break;
+      case 'AUDIT_GPU_RDMA':
+        output = `[${timestamp}][TargetClusterAgent Pod capm3-target-agent-operator-9c41a2] NVIDIA H100 GPU Direct RDMA link audit passed: RoCEv2 wire rate 198.7 Gbps, sub-microsecond latency verified.`;
+        break;
+      default:
+        output = `[${timestamp}][TargetClusterAgent Pod capm3-target-agent-operator-9c41a2] Executed Go instruction: ${command} (Exit code 0)`;
+    }
+  }
+
+  res.json({
+    success: true,
+    data: {
+      target_agent,
+      command,
+      output,
+      executed_at: timestamp,
+    },
+  });
+});
+
+apiRouter.get('/metal3/agents/pod-code', (_req: Request, res: Response) => {
+  const readSafe = (p: string, fallback: string) => {
+    try {
+      const full = path.resolve(process.cwd(), p);
+      if (fs.existsSync(full)) {
+        return fs.readFileSync(full, 'utf8');
+      }
+    } catch {}
+    return fallback;
+  };
+
+  res.json({
+    success: true,
+    files: {
+      eph_main_go: {
+        path: 'backend-go/cmd/eph-agent/main.go',
+        title: 'Agent 1 Pod 入口 (cmd/eph-agent/main.go)',
+        language: 'go',
+        role: 'Eph-Node Bootstrap Agent Daemon',
+        content: readSafe('backend-go/cmd/eph-agent/main.go', 'package main\n\n// Eph-node agent entrypoint in pure Go'),
+      },
+      eph_pkg_go: {
+        path: 'backend-go/pkg/agent/ephnode/agent.go',
+        title: 'Agent 1 核心守护逻辑 (pkg/agent/ephnode/agent.go)',
+        language: 'go',
+        role: 'Ironic Watchdog & Hardware Discovery Reconciler',
+        content: readSafe('backend-go/pkg/agent/ephnode/agent.go', 'package ephnode\n\n// Eph-node agent logic in Go'),
+      },
+      eph_dhcp_go: {
+        path: 'backend-go/pkg/agent/ephnode/dhcp_monitor.go',
+        title: 'Agent 1 DHCP/PXE 租约监控器 (pkg/agent/ephnode/dhcp_monitor.go)',
+        language: 'go',
+        role: 'Dnsmasq TFTP/PXE Lease Watchdog',
+        content: readSafe('backend-go/pkg/agent/ephnode/dhcp_monitor.go', 'package ephnode\n\n// DHCP monitor in pure Go'),
+      },
+      eph_probe_go: {
+        path: 'backend-go/pkg/agent/ephnode/probe_server.go',
+        title: 'Agent 1 Pod 探针与指标服务 (pkg/agent/ephnode/probe_server.go)',
+        language: 'go',
+        role: 'K8s Healthz / Readyz / Prometheus Metrics (:8081)',
+        content: readSafe('backend-go/pkg/agent/ephnode/probe_server.go', 'package ephnode\n\n// Probe server in pure Go'),
+      },
+      target_main_go: {
+        path: 'backend-go/cmd/target-agent/main.go',
+        title: 'Agent 2 Pod 入口 (cmd/target-agent/main.go)',
+        language: 'go',
+        role: 'Target Cluster Lifecycle Daemon',
+        content: readSafe('backend-go/cmd/target-agent/main.go', 'package main\n\n// Target agent entrypoint in pure Go'),
+      },
+      target_pkg_go: {
+        path: 'backend-go/pkg/agent/target/agent.go',
+        title: 'Agent 2 核心生命周期逻辑 (pkg/agent/target/agent.go)',
+        language: 'go',
+        role: 'CAPI MachinePool Reconciler & Multi-CNI Mesh Custodian',
+        content: readSafe('backend-go/pkg/agent/target/agent.go', 'package target\n\n// Target agent logic in Go'),
+      },
+      target_cni_go: {
+        path: 'backend-go/pkg/agent/target/cni_mesh.go',
+        title: 'Agent 2 Multi-CNI 网状拓扑编排 (pkg/agent/target/cni_mesh.go)',
+        language: 'go',
+        role: 'Multus + Calico + OVS + SR-IOV 200Gbps RoCEv2 Mesh',
+        content: readSafe('backend-go/pkg/agent/target/cni_mesh.go', 'package target\n\n// Multi-CNI mesh manager in pure Go'),
+      },
+      target_etcd_go: {
+        path: 'backend-go/pkg/agent/target/etcd_verifier.go',
+        title: 'Agent 2 Etcd Raft 法定人数校验器 (pkg/agent/target/etcd_verifier.go)',
+        language: 'go',
+        role: 'In-Pod Etcd Consensus & Leader Election Auditor',
+        content: readSafe('backend-go/pkg/agent/target/etcd_verifier.go', 'package target\n\n// etcd verifier in pure Go'),
+      },
+      target_probe_go: {
+        path: 'backend-go/pkg/agent/target/probe_server.go',
+        title: 'Agent 2 Pod 探针与指标服务 (pkg/agent/target/probe_server.go)',
+        language: 'go',
+        role: 'K8s Healthz / Readyz / Prometheus Metrics (:8082)',
+        content: readSafe('backend-go/pkg/agent/target/probe_server.go', 'package target\n\n// Target probe server in pure Go'),
+      },
+      proto_handshake_go: {
+        path: 'backend-go/pkg/agent/protocol/handshake.go',
+        title: '双 Agent 安全握手与 CRD 验签协议 (pkg/agent/protocol/handshake.go)',
+        language: 'go',
+        role: 'Cryptographic SHA-256 Dual-Agent Handover Protocol',
+        content: readSafe('backend-go/pkg/agent/protocol/handshake.go', 'package protocol\n\n// Handshake protocol in pure Go'),
+      },
+      eph_pod_yaml: {
+        path: 'backend-go/deploy/eph-agent-pod.yaml',
+        title: 'Agent 1 Kubernetes Pod 资源编排 (Pod YAML)',
+        language: 'yaml',
+        role: 'Ephemeral Node Pod Manifest',
+        content: readSafe('backend-go/deploy/eph-agent-pod.yaml', 'apiVersion: v1\nkind: Pod'),
+      },
+      target_ds_yaml: {
+        path: 'backend-go/deploy/target-agent-daemonset.yaml',
+        title: 'Agent 2 Kubernetes DaemonSet 资源编排 (DaemonSet YAML)',
+        language: 'yaml',
+        role: 'Target Cluster CAPI DaemonSet Manifest',
+        content: readSafe('backend-go/deploy/target-agent-daemonset.yaml', 'apiVersion: apps/v1\nkind: DaemonSet'),
+      },
+    },
+  });
+});
+
+// Dual-Network (Control Network vs Data Network) Specification
+apiRouter.get('/metal3/network/spec', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      control_network: {
+        vlan_id: 100,
+        subnet: '10.244.100.0/24',
+        gateway: '10.244.100.1',
+        mtu: 1500,
+        interface_name: 'eth0 (Management NIC)',
+        purpose: 'Cluster API, Kube-Apiserver, Ironic BMC OOB, Etcd Raft Heartbeats',
+        traffic_type: 'Low latency, high reliability control packets',
+      },
+      data_network: {
+        vlan_id: 200,
+        subnet: '10.250.0.0/16',
+        gateway: '10.250.0.1',
+        mtu: 9000,
+        interface_name: 'eth1 / mlx5_core (Mellanox CX-7 Dual 200Gbps)',
+        purpose: 'Distributed GPU AllReduce, AI Training Tensor Exchange, NVMe-oF Storage',
+        traffic_type: 'Jumbo Frames 9000 MTU, Lossless RoCEv2, PFC / ECN QoS Priority 3',
+      },
+    },
+  });
+});
+
+// Multi-CNI Coexistence Specification (Multus + Calico + OVS + SR-IOV)
+apiRouter.get('/metal3/cni/spec', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      orchestrator: {
+        name: 'Multus CNI',
+        version: 'v4.1.0',
+        role: 'Meta-plugin directing multi-homed Pod interfaces',
+      },
+      plugins: [
+        {
+          name: 'Calico CNI (Primary / Default)',
+          interface: 'eth0',
+          network: 'Control VLAN 100',
+          mtu: 1500,
+          ipam: 'Calico Host-Local IPAM (10.244.100.0/24)',
+          features: ['BGP Peering', 'NetworkPolicy Enforce', 'Kube-Proxy replacement via eBPF'],
+        },
+        {
+          name: 'Open vSwitch (OVS CNI)',
+          interface: 'net1',
+          network: 'Data VLAN 200',
+          mtu: 9000,
+          ipam: 'Static / Whereabouts IPAM (10.250.10.0/24)',
+          features: ['L2 Isolation', 'Zero Packet Drop on East-West East Traffic', 'OVS-DPDK accelerated bridge'],
+        },
+        {
+          name: 'Mellanox SR-IOV Device Plugin + RoCEv2 CNI',
+          interface: 'net2',
+          network: 'Ultra-High Speed Data Fabric',
+          mtu: 9000,
+          ipam: 'RDMA Direct MacVLAN IPAM (10.250.200.0/24)',
+          features: ['Hardware Bypass', 'NVIDIA GPUDirect RDMA', 'Wire-speed 200Gbps Line Rate (<1.2us latency)'],
+        },
+      ],
+    },
+  });
+});
+
+apiRouter.post('/metal3/cni/test', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    results: [
+      {
+        channel: 'Control Plane (Calico - eth0)',
+        source: 'bmh-master-k8s-01',
+        destination: 'bmh-worker-k8s-01',
+        packet_type: 'TCP/6443 (TLS)',
+        latency_ms: 0.28,
+        status: 'PASSED',
+        mtu_verified: 1500,
+      },
+      {
+        channel: 'Pod Data Mesh (OVS - net1)',
+        source: 'pod-tenant-app-a',
+        destination: 'pod-tenant-app-b',
+        packet_type: 'VXLAN / L2 Geneve',
+        latency_ms: 0.12,
+        status: 'PASSED',
+        mtu_verified: 9000,
+      },
+      {
+        channel: 'GPU RoCEv2 Fabric (SR-IOV - net2)',
+        source: 'h100-worker-01 (GPU-0)',
+        destination: 'h100-worker-02 (GPU-0)',
+        packet_type: 'InfiniBand / RoCEv2 RC',
+        latency_ms: 0.0018,
+        status: 'PASSED',
+        mtu_verified: 9000,
+        throughput_gbps: 198.4,
+      },
+    ],
+  });
+});
+
+apiRouter.post('/metal3/cni/simulate-packet', (req: Request, res: Response) => {
+  const { flow_type = 'GPU_RDMA_ROCEV2' } = req.body;
+  const traces: Record<string, any> = {
+    GPU_RDMA_ROCEV2: {
+      profile: 'GPU Direct RDMA (RoCEv2) Ultra-Low Latency Flow',
+      interface: 'net2 (Mellanox ConnectX-7 VF)',
+      network: 'Data Network (VLAN 200)',
+      mtu: 9000,
+      total_latency_us: 1.15,
+      lossless_qos: 'PFC Priority 3 Enabled, ECN Mark threshold 64KB',
+      hops: [
+        { hop: 1, layer: 'NVIDIA H100 GPU Memory', latency_us: 0.12, action: 'GPUDirect P2P DMA Transfer initiated via PCIe Gen5 x16' },
+        { hop: 2, layer: 'Mellanox ConnectX-7 HCA', latency_us: 0.35, action: 'Hardware packetization with RoCEv2 IB BTH header (QP: 0x4a12)' },
+        { hop: 3, layer: 'TOR Leaf Switch (Lossless)', latency_us: 0.32, action: 'Cut-Through Wire Switch forwarding via PFC Priority 3 buffer' },
+        { hop: 4, layer: 'Target Worker NIC VF', latency_us: 0.24, action: 'Zero-copy DMA directly into Target H100 VRAM address space' },
+        { hop: 5, layer: 'NCCL Ring Convergence', latency_us: 0.12, action: 'AllReduce collective synchronization acknowledged' },
+      ],
+    },
+    POD_L2_VLAN200: {
+      profile: 'Pod-to-Pod L2 Data Mesh (OVS CNI Jumbo Frames)',
+      interface: 'net1 (br-data OVS Port)',
+      network: 'Data Network (VLAN 200)',
+      mtu: 9000,
+      total_latency_us: 110.0,
+      lossless_qos: 'DiffServ Standard Fast-Forward',
+      hops: [
+        { hop: 1, layer: 'Pod veth pair (net1)', latency_us: 12.0, action: 'Kernel veth packet forward to host br-data Open vSwitch bridge' },
+        { hop: 2, layer: 'Open vSwitch DPDK Flow', latency_us: 25.0, action: 'Flow match: in_port=2,dl_vlan=200 -> actions=output:bond0.200' },
+        { hop: 3, layer: 'Physical Uplink (VLAN 200)', latency_us: 45.0, action: 'Jumbo frame 9000 bytes transmission across 100G Leaf-Spine' },
+        { hop: 4, layer: 'Target Host OVS Bridge', latency_us: 18.0, action: 'MAC learning table lookup and egress to target container namespace' },
+        { hop: 5, layer: 'Target Pod Ingress', latency_us: 10.0, action: 'TCP socket payload delivered with zero IP fragmentation' },
+      ],
+    },
+    APISERVER_MGMT: {
+      profile: 'Control Plane Apiserver & Etcd Raft Replication (Calico CNI)',
+      interface: 'eth0 (Management Interface)',
+      network: 'Control Network (VLAN 100)',
+      mtu: 1500,
+      total_latency_us: 280.0,
+      lossless_qos: 'Standard Best-Effort (DSCP CS6 for K8s Traffic)',
+      hops: [
+        { hop: 1, layer: 'Kubelet / Agent Pod', latency_us: 30.0, action: 'TLS 1.3 mutual handshake packet dispatched to Apiserver VIP' },
+        { hop: 2, layer: 'Calico eBPF Conntrack', latency_us: 40.0, action: 'eBPF sockops program routes directly to local/remote endpoint' },
+        { hop: 3, layer: 'Control Network Spine', latency_us: 120.0, action: 'L3 routed packet traversal through VLAN 100 gateway 10.244.100.1' },
+        { hop: 4, layer: 'HAProxy / Keepalived VIP', latency_us: 50.0, action: 'Load balancing to healthy Control Plane node bmh-master-k8s-01' },
+        { hop: 5, layer: 'Kube-Apiserver Ingress', latency_us: 40.0, action: 'Etcd Raft quorum write (1.3ms commit latency)' },
+      ],
+    },
+  };
+  res.json({
+    success: true,
+    data: traces[flow_type] || traces.GPU_RDMA_ROCEV2,
+  });
+});
+
+// Talos Omni Rapid Deployment Endpoints
+apiRouter.get('/metal3/omni/status', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      status: 'IDLE',
+      current_step: 0,
+      total_steps: 6,
+      progress_percent: 0,
+      steps: [
+        { id: 'step_1', name: 'Machine Declaration', name_zh: '声明式硬件机器清单校验', status: 'PENDING' },
+        { id: 'step_2', name: 'VirtualMedia Mount', name_zh: '带外 VirtualMedia 镜像挂载', status: 'PENDING' },
+        { id: 'step_3', name: 'Talos Kernel Boot', name_zh: '不可变只读 Linux 内核安全引导', status: 'PENDING' },
+        { id: 'step_4', name: 'PKI Certificate Exchange', name_zh: '双向 mTLS 证书自动交换与签发', status: 'PENDING' },
+        { id: 'step_5', name: 'Etcd Cluster Bootstrap', name_zh: '高可用 Etcd 集群法定人数自组网', status: 'PENDING' },
+        { id: 'step_6', name: 'Multi-CNI Mesh Ready', name_zh: 'Multi-CNI 高性能网络网状对齐', status: 'PENDING' },
+      ],
+      cluster_name: 'cluster-prod-gpu-k8s',
+      k8s_version: 'v1.31.2',
+    },
+  });
+});
+
+apiRouter.post('/metal3/omni/deploy', (req: Request, res: Response) => {
+  const { cluster_name = 'cluster-prod-gpu-k8s', k8s_version = 'v1.31.2' } = req.body;
+  res.json({
+    success: true,
+    data: {
+      status: 'COMPLETED',
+      current_step: 6,
+      total_steps: 6,
+      progress_percent: 100,
+      cluster_name,
+      k8s_version,
+      steps: [
+        { id: 'step_1', name: 'Machine Declaration', name_zh: '声明式硬件机器清单校验', status: 'COMPLETED', duration_ms: 120 },
+        { id: 'step_2', name: 'VirtualMedia Mount', name_zh: '带外 VirtualMedia 镜像挂载', status: 'COMPLETED', duration_ms: 450 },
+        { id: 'step_3', name: 'Talos Kernel Boot', name_zh: '不可变只读 Linux 内核安全引导', status: 'COMPLETED', duration_ms: 800 },
+        { id: 'step_4', name: 'PKI Certificate Exchange', name_zh: '双向 mTLS 证书自动交换与签发', status: 'COMPLETED', duration_ms: 320 },
+        { id: 'step_5', name: 'Etcd Cluster Bootstrap', name_zh: '高可用 Etcd 集群法定人数自组网', status: 'COMPLETED', duration_ms: 600 },
+        { id: 'step_6', name: 'Multi-CNI Mesh Ready', name_zh: 'Multi-CNI 高性能网络网状对齐', status: 'COMPLETED', duration_ms: 410 },
+      ],
+    },
+  });
+});
+
+apiRouter.post('/metal3/omni/start', (req: Request, res: Response) => {
+  const { cluster_name = 'cluster-prod-gpu-k8s', k8s_version = 'v1.31.2' } = req.body;
+  res.json({
+    success: true,
+    data: {
+      status: 'IN_PROGRESS',
+      current_step: 1,
+      total_steps: 6,
+      progress_percent: 16,
+      cluster_name,
+      k8s_version,
+      steps: [
+        { id: 'step_1', name: 'Machine Declaration', name_zh: '声明式硬件机器清单校验', status: 'IN_PROGRESS' },
+        { id: 'step_2', name: 'VirtualMedia Mount', name_zh: '带外 VirtualMedia 镜像挂载', status: 'PENDING' },
+        { id: 'step_3', name: 'Talos Kernel Boot', name_zh: '不可变只读 Linux 内核安全引导', status: 'PENDING' },
+        { id: 'step_4', name: 'PKI Certificate Exchange', name_zh: '双向 mTLS 证书自动交换与签发', status: 'PENDING' },
+        { id: 'step_5', name: 'Etcd Cluster Bootstrap', name_zh: '高可用 Etcd 集群法定人数自组网', status: 'PENDING' },
+        { id: 'step_6', name: 'Multi-CNI Mesh Ready', name_zh: 'Multi-CNI 高性能网络网状对齐', status: 'PENDING' },
+      ],
+    },
+  });
+});
+
+apiRouter.post('/metal3/omni/step', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      status: 'IN_PROGRESS',
+      current_step: 2,
+      total_steps: 6,
+      progress_percent: 33,
+      steps: [
+        { id: 'step_1', name: 'Machine Declaration', name_zh: '声明式硬件机器清单校验', status: 'COMPLETED' },
+        { id: 'step_2', name: 'VirtualMedia Mount', name_zh: '带外 VirtualMedia 镜像挂载', status: 'IN_PROGRESS' },
+        { id: 'step_3', name: 'Talos Kernel Boot', name_zh: '不可变只读 Linux 内核安全引导', status: 'PENDING' },
+        { id: 'step_4', name: 'PKI Certificate Exchange', name_zh: '双向 mTLS 证书自动交换与签发', status: 'PENDING' },
+        { id: 'step_5', name: 'Etcd Cluster Bootstrap', name_zh: '高可用 Etcd 集群法定人数自组网', status: 'PENDING' },
+        { id: 'step_6', name: 'Multi-CNI Mesh Ready', name_zh: 'Multi-CNI 高性能网络网状对齐', status: 'PENDING' },
+      ],
+    },
+  });
+});
+
+apiRouter.post('/metal3/omni/reset', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      status: 'IDLE',
+      current_step: 0,
+      total_steps: 6,
+      progress_percent: 0,
+      steps: [
+        { id: 'step_1', name: 'Machine Declaration', name_zh: '声明式硬件机器清单校验', status: 'PENDING' },
+        { id: 'step_2', name: 'VirtualMedia Mount', name_zh: '带外 VirtualMedia 镜像挂载', status: 'PENDING' },
+        { id: 'step_3', name: 'Talos Kernel Boot', name_zh: '不可变只读 Linux 内核安全引导', status: 'PENDING' },
+        { id: 'step_4', name: 'PKI Certificate Exchange', name_zh: '双向 mTLS 证书自动交换与签发', status: 'PENDING' },
+        { id: 'step_5', name: 'Etcd Cluster Bootstrap', name_zh: '高可用 Etcd 集群法定人数自组网', status: 'PENDING' },
+        { id: 'step_6', name: 'Multi-CNI Mesh Ready', name_zh: 'Multi-CNI 高性能网络网状对齐', status: 'PENDING' },
+      ],
+    },
+  });
+});
+
+apiRouter.post('/metal3/omni/validate-yaml', (req: Request, res: Response) => {
+  const { manifest = '' } = req.body;
+  const hasApiVersion = manifest.includes('apiVersion:');
+  const hasKind = manifest.includes('kind:');
+  const isValid = hasApiVersion && hasKind;
+
+  res.json({
+    success: true,
+    data: {
+      valid: isValid,
+      errors: isValid ? [] : ['Missing required Kubernetes manifest headers (apiVersion and kind)'],
+      resource_count: isValid ? 1 : 0,
+      identified_kinds: isValid ? ['BareMetalHost', 'TalosConfig', 'Cluster'] : [],
+      validator: 'Go AST Semantic Linter (v1.22)',
+    },
+  });
+});
+
+apiRouter.get('/metal3/omni/manifests', (req: Request, res: Response) => {
+  const { cluster_name = 'cluster-prod-gpu-k8s', k8s_version = 'v1.31.2' } = req.query;
+  res.json({
+    success: true,
+    manifests: [
+      {
+        filename: '01-talos-controlplane.yaml',
+        kind: 'TalosControlPlane',
+        description: 'Immutable minimal Linux OS configuration with hardened etcd & kernel sysctl tuning',
+        content: `apiVersion: controlplane.talos.dev/v1alpha1\nkind: TalosControlPlane\nmetadata:\n  name: ${cluster_name}-cp\n  namespace: metal3-system\nspec:\n  version: ${k8s_version}\n  replicas: 3\n  configPatches:\n    - op: add\n      path: /cluster/network/cni\n      value:\n        name: none\n    - op: add\n      path: /machine/sysctls\n      value:\n        net.core.somaxconn: "65535"\n        net.ipv4.tcp_fastopen: "3"`,
+      },
+      {
+        filename: '02-metal3-machinepool.yaml',
+        kind: 'Metal3MachinePool',
+        description: 'Cluster API Provider Metal3 declarative baremetal host selection & automated PXE boot',
+        content: `apiVersion: infrastructure.cluster.x-k8s.io/v1beta1\nkind: Metal3MachinePool\nmetadata:\n  name: ${cluster_name}-workers\n  namespace: metal3-system\nspec:\n  clusterName: ${cluster_name}\n  replicas: 12\n  template:\n    spec:\n      hostSelector:\n        matchLabels:\n          hardware/gpu-model: nvidia-h100-80gb\n          hardware/roce-ready: "true"`,
+      },
+      {
+        filename: '03-multus-network-attachment.yaml',
+        kind: 'NetworkAttachmentDefinition',
+        description: 'Dual-Network definition: RoCEv2 Mellanox SR-IOV 200Gbps on VLAN 200 Jumbo Frames',
+        content: `apiVersion: k8s.cni.cncf.io/v1\nkind: NetworkAttachmentDefinition\nmetadata:\n  name: rocev2-vlan200-net\n  namespace: default\nspec:\n  config: '{\n    "cniVersion": "0.3.1",\n    "name": "rocev2-vlan200-net",\n    "type": "sriov",\n    "vlan": 200,\n    "mtu": 9000,\n    "ipam": {\n      "type": "whereabouts",\n      "range": "10.250.200.0/24"\n    }\n  }'`,
+      },
+    ],
+  });
 });
 
 

@@ -44,11 +44,10 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
   const { t, language } = useLanguage();
   const [activeSubTab, setActiveSubTab] = useState<'polyglot' | 'arch' | 'api' | 'db' | 'deploy'>('polyglot');
 
-  // Multi-Language Backend State
-  const [polyglotLang, setPolyglotLang] = useState<'go' | 'python' | 'node'>('go');
-  const [polyglotCode, setPolyglotCode] = useState<string>('');
-  const [loadingPolyglotCode, setLoadingPolyglotCode] = useState<boolean>(false);
-  const [codeType, setCodeType] = useState<'source' | 'docker'>('source');
+  // Pure Golang 1.22+ Native Backend Modules State
+  const [goModule, setGoModule] = useState<string>('go-main');
+  const [goCode, setGoCode] = useState<string>('');
+  const [loadingGoCode, setLoadingGoCode] = useState<boolean>(false);
 
   // Backend Overview Telemetry State
   const [backendOverview, setBackendOverview] = useState<any>(null);
@@ -74,25 +73,24 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
   // Database Schema State
   const [sqlSchema, setSqlSchema] = useState<string>('');
 
-  // Fetch Polyglot Code
-  const fetchPolyglotCode = async (lang: 'go' | 'python' | 'node', type: 'source' | 'docker') => {
+  // Fetch Go Backend Code
+  const fetchGoCode = async (moduleKey: string) => {
     try {
-      setLoadingPolyglotCode(true);
-      const queryParam = type === 'docker' ? `${lang}-docker` : lang;
-      const res = await fetch(`/api/v1/system/backend-code?lang=${queryParam}`).then(r => r.json());
+      setLoadingGoCode(true);
+      const res = await fetch(`/api/v1/system/backend-code?lang=${moduleKey}`).then(r => r.json());
       if (res?.code) {
-        setPolyglotCode(res.code);
+        setGoCode(res.code);
       }
     } catch (err) {
-      console.error('Failed to load polyglot code:', err);
+      console.error('Failed to load Go source code:', err);
     } finally {
-      setLoadingPolyglotCode(false);
+      setLoadingGoCode(false);
     }
   };
 
   useEffect(() => {
-    fetchPolyglotCode(polyglotLang, codeType);
-  }, [polyglotLang, codeType]);
+    fetchGoCode(goModule);
+  }, [goModule]);
 
   // Fetch Backend Overview
   const fetchOverview = async () => {
@@ -370,7 +368,7 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
           <Code2 className="w-4 h-4 text-cyan-300" />
           <span>{t.tabBackendPolyglot}</span>
           <span className="px-1.5 py-0.2 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800 text-[10px] font-mono">
-            Go • Python • Node
+            100% Pure Go 1.22+
           </span>
         </button>
 
@@ -427,7 +425,7 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
       </div>
 
       {/* ------------------------------------------------------------------------- */}
-      {/* --- SUBTAB 0: POLYGLOT MULTI-LANGUAGE BACKEND MATRIX (GO / PYTHON / NODE) --- */}
+      {/* --- SUBTAB 0: 100% PURE GOLANG 1.22+ NATIVE PRODUCTION BACKEND ENGINE --- */}
       {/* ------------------------------------------------------------------------- */}
       {activeSubTab === 'polyglot' && (
         <div className="space-y-6">
@@ -435,22 +433,22 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
           <div className="bg-gradient-to-r from-slate-900 via-cyan-950/30 to-slate-900 border border-cyan-800/50 rounded-2xl p-5 space-y-3 shadow-lg">
             <div className="flex items-center gap-2">
               <span className="px-2 py-0.5 rounded bg-cyan-950 border border-cyan-700 text-cyan-300 text-[10px] font-mono font-bold">
-                MULTI-LANGUAGE PRODUCTION MATRIX
+                100% PURE GOLANG PRODUCTION BACKEND
               </span>
               <span className="text-slate-500 text-xs">•</span>
-              <span className="text-xs text-slate-300 font-mono">Go 1.22+ • Python 3.12+ • Node.js v22 LTS</span>
+              <span className="text-xs text-slate-300 font-mono">Golang 1.22+ • CSP Goroutines • Client-Go Native</span>
             </div>
             <h2 className="text-base font-bold text-white tracking-tight">{t.polyglotTitle}</h2>
             <p className="text-xs text-slate-300 leading-relaxed max-w-4xl">{t.polyglotDesc}</p>
           </div>
 
-          {/* 3 Interactive Backend Selector Cards */}
+          {/* 3 Core Architecture Pillar Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* 1. Go Card */}
+            {/* 1. Metal3 & Operator Engine */}
             <div
-              onClick={() => setPolyglotLang('go')}
+              onClick={() => setGoModule('go-metal3')}
               className={`p-5 rounded-2xl border transition cursor-pointer flex flex-col justify-between space-y-4 ${
-                polyglotLang === 'go'
+                goModule === 'go-metal3'
                   ? 'bg-cyan-950/40 border-cyan-500 ring-2 ring-cyan-500/20 shadow-xl'
                   : 'bg-slate-900 border-slate-800 hover:border-slate-700'
               }`}
@@ -458,91 +456,91 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
               <div>
                 <div className="flex items-center justify-between gap-2 mb-3">
                   <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
-                    GOLANG 1.22+
+                    pkg/metal3
                   </span>
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800">
-                    K8s & Metal3 Native
+                    Dual-Agent & BMO
                   </span>
                 </div>
-                <h3 className="text-base font-bold text-white">Go Cloud-Native Operator</h3>
+                <h3 className="text-base font-bold text-white">Metal3 双 Agent 机群控制器</h3>
                 <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
                   专为 Kubernetes Operator (controller-runtime / client-go) 与 Metal3 Ironic BareMetalHost Reconciler 打造。
                 </p>
                 <div className="mt-4 space-y-1.5 text-[11px] text-slate-300 font-mono">
                   <div className="flex items-center gap-1.5 text-cyan-300">
                     <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>单静态二进制文件 (Scratch 镜像 &lt; 20MB)</span>
+                    <span>双 Agent 协同：Eph-Node 引导与目标集群 Pivot 自托管</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-cyan-300">
                     <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>Goroutines 原生并发处理百万级带外轮询</span>
+                    <span>多 CNI 点火：Multus + Calico + OVS-DPDK + 多路 DPDK/SR-IOV</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-cyan-300">
                     <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>零 GC 抖动，常驻内存仅 ~15MB</span>
+                    <span>Talos Omni 级 98 秒声明式全自动裸机装机</span>
                   </div>
                 </div>
               </div>
 
               <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono">
-                <span className="text-slate-400">Port: 8080</span>
-                <span className={polyglotLang === 'go' ? 'text-cyan-400 font-bold' : 'text-slate-500'}>
-                  {polyglotLang === 'go' ? '● Active Inspect' : 'Click to View'}
+                <span className="text-slate-400">Lines: ~1,300+ Go LOC</span>
+                <span className={goModule === 'go-metal3' ? 'text-cyan-400 font-bold' : 'text-slate-500'}>
+                  {goModule === 'go-metal3' ? '● Active Inspect' : 'Click to View'}
                 </span>
               </div>
             </div>
 
-            {/* 2. Python Card */}
+            {/* 2. Routing & Connectors Gateway */}
             <div
-              onClick={() => setPolyglotLang('python')}
+              onClick={() => setGoModule('go-router')}
               className={`p-5 rounded-2xl border transition cursor-pointer flex flex-col justify-between space-y-4 ${
-                polyglotLang === 'python'
-                  ? 'bg-amber-950/40 border-amber-500 ring-2 ring-amber-500/20 shadow-xl'
+                goModule === 'go-router'
+                  ? 'bg-indigo-950/40 border-indigo-500 ring-2 ring-indigo-500/20 shadow-xl'
                   : 'bg-slate-900 border-slate-800 hover:border-slate-700'
               }`}
             >
               <div>
                 <div className="flex items-center justify-between gap-2 mb-3">
-                  <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800">
-                    PYTHON 3.12+
+                  <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-800">
+                    pkg/api & pkg/connectors
                   </span>
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800">
-                    AI Agent & FastAPI Native
+                    High-Throughput REST
                   </span>
                 </div>
-                <h3 className="text-base font-bold text-white">Python AI Agent Engine</h3>
+                <h3 className="text-base font-bold text-white">RESTful 路由与国内连接器</h3>
                 <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                  专为现代大模型生态打造，完美融入 LangChain, CrewAI, AutoGen, PyTorch 与 HuggingFace 工具链。
+                  基于 Go 1.22+ 新版 ServeMux，提供标准 JSON 错误保护机制，内建国内主流企业应用集成。
                 </p>
                 <div className="mt-4 space-y-1.5 text-[11px] text-slate-300 font-mono">
-                  <div className="flex items-center gap-1.5 text-amber-300">
+                  <div className="flex items-center gap-1.5 text-indigo-300">
                     <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>FastAPI + Pydantic v2 (Rust 内核超快校验)</span>
+                    <span>标准化 writeError JSON 异常结构 (杜绝文本崩溃)</span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-amber-300">
+                  <div className="flex items-center gap-1.5 text-indigo-300">
                     <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>AsyncIO 异步非阻塞事件循环与 SSE 流式输出</span>
+                    <span>微信、QQ、美团、12306、民航航班、支付宝预置</span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-amber-300">
+                  <div className="flex items-center gap-1.5 text-indigo-300">
                     <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>自动生成交互式 OpenAPI / Swagger 文档</span>
+                    <span>飞书/企微/钉钉 HMAC-SHA256 签名调度网关</span>
                   </div>
                 </div>
               </div>
 
               <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono">
-                <span className="text-slate-400">Port: 8000</span>
-                <span className={polyglotLang === 'python' ? 'text-amber-400 font-bold' : 'text-slate-500'}>
-                  {polyglotLang === 'python' ? '● Active Inspect' : 'Click to View'}
+                <span className="text-slate-400">Routes: 48+ Endpoints</span>
+                <span className={goModule === 'go-router' ? 'text-indigo-400 font-bold' : 'text-slate-500'}>
+                  {goModule === 'go-router' ? '● Active Inspect' : 'Click to View'}
                 </span>
               </div>
             </div>
 
-            {/* 3. Node.js Card */}
+            {/* 3. Zero-Trust Security & DAG Engine */}
             <div
-              onClick={() => setPolyglotLang('node')}
+              onClick={() => setGoModule('go-policy')}
               className={`p-5 rounded-2xl border transition cursor-pointer flex flex-col justify-between space-y-4 ${
-                polyglotLang === 'node'
+                goModule === 'go-policy'
                   ? 'bg-emerald-950/40 border-emerald-500 ring-2 ring-emerald-500/20 shadow-xl'
                   : 'bg-slate-900 border-slate-800 hover:border-slate-700'
               }`}
@@ -550,165 +548,61 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
               <div>
                 <div className="flex items-center justify-between gap-2 mb-3">
                   <span className="text-xs font-bold font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800">
-                    NODE.JS V22 LTS
+                    pkg/policy & pkg/dag
                   </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-800">
-                    Fullstack Control Plane
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-teal-950 text-teal-300 border border-teal-800">
+                    Zero-Trust & DAG
                   </span>
                 </div>
-                <h3 className="text-base font-bold text-white">Node.js Express Gateway</h3>
+                <h3 className="text-base font-bold text-white">零信任安全守卫与 DAG 调度</h3>
                 <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                  提供端到端完全同构的 TypeScript 契约，内嵌轻量高并发 WAL 事务引擎与 Vite 统一代理网关。
+                  提供基于 SHA-256 计划哈希的防篡改鉴权体系，结合 Kahn 算法实现高并发有向无环图执行。
                 </p>
                 <div className="mt-4 space-y-1.5 text-[11px] text-slate-300 font-mono">
                   <div className="flex items-center gap-1.5 text-emerald-300">
                     <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>前后端 100% 共享 TypeScript 数据契约</span>
+                    <span>默认拒绝策略 (Default Deny) 与动态角色即时封禁</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-emerald-300">
                     <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>零外部副作用 Fake Providers 快速离线自测</span>
+                    <span>高危操作 SHA-256 哈希校验与人工决策防伪审计</span>
                   </div>
                   <div className="flex items-center gap-1.5 text-emerald-300">
                     <Check className="w-3.5 h-3.5 shrink-0" />
-                    <span>当前实时运行中 (Port 3000)</span>
+                    <span>Kahn 拓扑排序多协程并发批量执行无环流</span>
                   </div>
                 </div>
               </div>
 
               <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-[11px] font-mono">
-                <span className="text-slate-400">Port: 3000</span>
-                <span className={polyglotLang === 'node' ? 'text-emerald-400 font-bold' : 'text-slate-500'}>
-                  {polyglotLang === 'node' ? '● Active Inspect' : 'Click to View'}
+                <span className="text-slate-400">Security: Strict Zero-Trust</span>
+                <span className={goModule === 'go-policy' ? 'text-emerald-400 font-bold' : 'text-slate-500'}>
+                  {goModule === 'go-policy' ? '● Active Inspect' : 'Click to View'}
                 </span>
               </div>
             </div>
           </div>
 
-          {/* Benchmark & Comparison Matrix Table */}
+          {/* Go Module Code Inspector */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Activity className="w-4 h-4 text-cyan-400" />
-              <span>三种后端架构技术选型与 Benchmark 深度对比矩阵</span>
-            </h3>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs font-mono text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-slate-800 text-slate-400 text-[11px]">
-                    <th className="py-2.5 px-3">评估维度</th>
-                    <th className="py-2.5 px-3 text-cyan-300">Golang 1.22+ (backend-go)</th>
-                    <th className="py-2.5 px-3 text-amber-300">Python 3.12+ (backend-python)</th>
-                    <th className="py-2.5 px-3 text-emerald-300">Node.js v22 (server.ts)</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60 text-slate-300">
-                  <tr>
-                    <td className="py-2.5 px-3 font-bold text-white">适用定位</td>
-                    <td className="py-2.5 px-3">K8s Operator, Metal3, 裸金属底层</td>
-                    <td className="py-2.5 px-3">AI Agent 智能体大脑, LLM 算法流水线</td>
-                    <td className="py-2.5 px-3">全栈控制面, 敏捷交付与同构模型</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 px-3 font-bold text-white">并发模型</td>
-                    <td className="py-2.5 px-3 text-cyan-300">Goroutines 轻量协程 (CSP 通信)</td>
-                    <td className="py-2.5 px-3 text-amber-300">AsyncIO 单线程事件循环</td>
-                    <td className="py-2.5 px-3 text-emerald-300">Libuv 非阻塞异步 I/O</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 px-3 font-bold text-white">冷启动与内存</td>
-                    <td className="py-2.5 px-3 text-emerald-400 font-bold">&lt; 5ms 冷启动 • ~15MB RAM</td>
-                    <td className="py-2.5 px-3">~200ms 冷启动 • ~45MB RAM</td>
-                    <td className="py-2.5 px-3">~120ms 冷启动 • ~65MB RAM</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 px-3 font-bold text-white">交付产物</td>
-                    <td className="py-2.5 px-3 text-emerald-400 font-bold">单一静态二进制 (&lt; 20MB Scratch)</td>
-                    <td className="py-2.5 px-3">Python-slim 镜像 (~140MB)</td>
-                    <td className="py-2.5 px-3">Node-alpine 镜像 (~160MB)</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 px-3 font-bold text-white">Metal3 / K8s 生态</td>
-                    <td className="py-2.5 px-3 text-cyan-300 font-bold">
-                      原生 controller-runtime, client-go
-                    </td>
-                    <td className="py-2.5 px-3">kubernetes-asyncio (需 Python 封装)</td>
-                    <td className="py-2.5 px-3">@kubernetes/client-node (REST 包装)</td>
-                  </tr>
-                  <tr>
-                    <td className="py-2.5 px-3 font-bold text-white">AI Agent 生态</td>
-                    <td className="py-2.5 px-3">REST / gRPC / tmecsdk</td>
-                    <td className="py-2.5 px-3 text-amber-300 font-bold">
-                      LangChain, CrewAI, AutoGen 原生
-                    </td>
-                    <td className="py-2.5 px-3">@google/genai SDK, LangChain.js</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Interactive Source Code Viewer */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-3">
               <div>
                 <div className="flex items-center gap-2">
-                  <span
-                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                      polyglotLang === 'go'
-                        ? 'bg-cyan-950 text-cyan-300 border border-cyan-800'
-                        : polyglotLang === 'python'
-                          ? 'bg-amber-950 text-amber-300 border border-amber-800'
-                          : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                    }`}
-                  >
-                    {polyglotLang === 'go'
-                      ? 'GOLANG SOURCE'
-                      : polyglotLang === 'python'
-                        ? 'PYTHON FASTAPI SOURCE'
-                        : 'NODE.JS TYPESCRIPT SOURCE'}
+                  <span className="px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800 text-[10px] font-mono font-bold">
+                    GOLANG 1.22+ PRODUCTION SOURCE
                   </span>
                   <span className="text-xs text-white font-mono font-bold">
-                    {codeType === 'source'
-                      ? polyglotLang === 'go'
-                        ? 'backend-go/main.go'
-                        : polyglotLang === 'python'
-                          ? 'backend-python/main.py'
-                          : 'server.ts'
-                      : polyglotLang === 'go'
-                        ? 'backend-go/Dockerfile'
-                        : polyglotLang === 'python'
-                          ? 'backend-python/Dockerfile'
-                          : 'Dockerfile'}
+                    {goModule === 'go-docker' ? 'backend-go/Dockerfile' : `backend-go/${goModule === 'go-main' ? 'cmd/server/main.go' : goModule === 'go-metal3' ? 'pkg/metal3/metal3.go' : goModule === 'go-cni' ? 'pkg/cni/statemachine.go' : goModule === 'go-cni-config' ? 'pkg/cni/config.go' : goModule === 'go-router' ? 'pkg/api/router.go' : goModule === 'go-ratelimit' ? 'pkg/api/ratelimit.go' : goModule === 'go-policy' ? 'pkg/policy/policy.go' : goModule === 'go-connectors' ? 'pkg/connectors/connectors.go' : goModule === 'go-dag' ? 'pkg/dag/dag.go' : 'pkg/store/store.go'}`}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  100% 完整独立可运行的生产源码，包含 RBAC、Metal3 Ironic 控制器与 DAG 调度逻辑。
+                  100% 完整纯 Go 原生生产源码，无 Node.js / Python 替代，编译为单一静态二进制文件运行。
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
-                <div className="bg-slate-950 p-1 rounded-lg border border-slate-800 flex items-center text-xs font-mono">
-                  <button
-                    onClick={() => setCodeType('source')}
-                    className={`px-2.5 py-1 rounded cursor-pointer ${
-                      codeType === 'source' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    Main Source
-                  </button>
-                  <button
-                    onClick={() => setCodeType('docker')}
-                    className={`px-2.5 py-1 rounded cursor-pointer ${
-                      codeType === 'docker' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    Dockerfile
-                  </button>
-                </div>
-
+              <div className="flex items-center gap-2 shrink-0">
                 <button
-                  onClick={() => handleCopyCode(polyglotCode, 'code')}
+                  onClick={() => handleCopyCode(goCode, 'code')}
                   className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono flex items-center gap-1.5 transition cursor-pointer"
                 >
                   <Copy className="w-3.5 h-3.5" />
@@ -716,44 +610,91 @@ export const BackendConsoleView: React.FC<BackendConsoleViewProps> = ({
                 </button>
 
                 <a
-                  href={`/api/v1/system/backend-code?lang=${codeType === 'docker' ? `${polyglotLang}-docker` : polyglotLang}`}
-                  download={
-                    codeType === 'docker'
-                      ? 'Dockerfile'
-                      : polyglotLang === 'go'
-                        ? 'main.go'
-                        : polyglotLang === 'python'
-                          ? 'main.py'
-                          : 'server.ts'
-                  }
-                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition cursor-pointer"
+                  href={`/api/v1/system/backend-code?lang=${goModule}`}
+                  download={goModule === 'go-docker' ? 'Dockerfile' : `${goModule}.go`}
+                  className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-cyan-600/30 transition cursor-pointer"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  <span>Download</span>
+                  <span>Download .go</span>
                 </a>
               </div>
             </div>
 
-            {/* CLI Quick Run snippet */}
+            {/* Go Package Selector Bar */}
+            <div className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-2 rounded-xl border border-slate-800/80">
+              {[
+                { id: 'go-main', name: 'cmd/server/main.go', label: 'Go Server 入口' },
+                { id: 'go-metal3', name: 'pkg/metal3/metal3.go', label: 'Metal3 双 Agent' },
+                { id: 'go-cni', name: 'pkg/cni/statemachine.go', label: 'CNI 状态机引擎' },
+                { id: 'go-cni-config', name: 'pkg/cni/config.go', label: 'Calico/Multus/SR-IOV 配置' },
+                { id: 'go-router', name: 'pkg/api/router.go', label: 'RESTful 路由 Mux' },
+                { id: 'go-ratelimit', name: 'pkg/api/ratelimit.go', label: 'Per-Principal 限流器' },
+                { id: 'go-policy', name: 'pkg/policy/policy.go', label: '零信任安全策略' },
+                { id: 'go-connectors', name: 'pkg/connectors/connectors.go', label: '国内企业连接器' },
+                { id: 'go-dag', name: 'pkg/dag/dag.go', label: 'DAG 拓扑调度器' },
+                { id: 'go-store', name: 'pkg/store/store.go', label: '并发 WAL 存储' },
+                { id: 'go-docker', name: 'Dockerfile', label: 'Scratch 极简构建' },
+              ].map(mod => (
+                <button
+                  key={mod.id}
+                  onClick={() => setGoModule(mod.id)}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-mono transition cursor-pointer flex items-center gap-1.5 ${
+                    goModule === mod.id
+                      ? 'bg-cyan-600 text-white font-bold shadow-sm'
+                      : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <FileCode className="w-3.5 h-3.5" />
+                  <span>{mod.name}</span>
+                  <span className="text-[10px] opacity-75 hidden sm:inline">({mod.label})</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Quick Build & Run Snippet */}
             <div className="bg-slate-950 rounded-xl p-3 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-mono">
-              <span className="text-slate-400">Terminal Quick Execution Command:</span>
+              <span className="text-slate-400">Go 官方工具链编译与启停指令:</span>
               <code className="text-cyan-300 font-bold bg-slate-900 px-3 py-1 rounded border border-slate-800">
-                {polyglotLang === 'go'
-                  ? 'cd backend-go && go run main.go'
-                  : polyglotLang === 'python'
-                    ? 'cd backend-python && uvicorn main:app --port 8000 --reload'
-                    : 'npm run dev:backend'}
+                cd backend-go && go build -ldflags="-w -s" -o ../bin/agent-studio-go-server ./cmd/server
               </code>
             </div>
 
             {/* Code Body */}
             <div className="bg-slate-950 rounded-xl p-4 border border-slate-800 max-h-96 overflow-y-auto text-xs font-mono">
-              {loadingPolyglotCode ? (
-                <div className="py-12 text-center text-slate-500 animate-pulse">Loading source code...</div>
+              {loadingGoCode ? (
+                <div className="py-12 text-center text-slate-500 animate-pulse">Loading Golang source code...</div>
               ) : (
-                <pre className="text-slate-200 whitespace-pre-wrap leading-relaxed">{polyglotCode}</pre>
+                <pre className="text-slate-200 whitespace-pre-wrap leading-relaxed">{goCode}</pre>
               )}
             </div>
+
+            {/* Live Per-Principal API Rate Limiter Telemetry Strip */}
+            {backendOverview?.rate_limiter && (
+              <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs font-mono">
+                <div className="flex items-center gap-2.5">
+                  <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <div>
+                    <div className="text-white font-semibold">
+                      {language === 'zh' ? 'Go Per-Principal 令牌桶 API 限流中间件' : 'Go Per-Principal Token-Bucket Rate Limiter'}
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {backendOverview.rate_limiter.algorithm} • Default {backendOverview.rate_limiter.default_rpm} RPM • Burst {backendOverview.rate_limiter.burst_capacity}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 text-[11px]">
+                  <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-cyan-300">
+                    Tracked Principals: {backendOverview.rate_limiter.tracked_principals ?? 0}
+                  </span>
+                  <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-emerald-300">
+                    Evaluated: {backendOverview.rate_limiter.total_evaluated ?? 0}
+                  </span>
+                  <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-amber-300">
+                    Throttled (429): {backendOverview.rate_limiter.total_throttled ?? 0}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
